@@ -1,0 +1,14 @@
+{
+  "name": "rask-dub-runner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dubbing runner for app.rask.ai: audio-only uploads, temporary emailnator accounts, local mux back onto the original video.",
+  "scripts": {
+    "start": "node scripts/run.mjs",
+    "check": "node --check scripts/run.mjs && node --check scripts/lib/rask.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

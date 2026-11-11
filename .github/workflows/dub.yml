@@ -1,0 +1,197 @@
+# Rask dub — audio-only pipeline.
+#
+# Only the audio track leaves the runner. Rask dubs each <=1 minute chunk, the
+# dubbed track is downloaded, fitted to its original slot and muxed back onto
+# the untouched source video locally (`-c:v copy`). No picture ever reaches
+# Rask, and the output is watermark-free.
+#
+# Accounts: every chunk is dubbed on a throw-away account made from an
+# emailnator Gmail address (Cognito signup + emailed code). A fresh account
+# carries 3 dubbing minutes / 5 projects, and each project is billed as one
+# minute, so ~3 chunks per account. The runner opens accounts as needed.
+#
+# Caveat: the emailnator inbox is public — only ever used for the one-time code.
+
+name: Rask dub
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'لینک ویدیو — آدرس مستقیم فایل (mp4 / mov / mkv) یا مسیر محلی'
+        required: true
+        type: string
+      target_lang:
+        description: 'زبان مقصد (Rask)'
+        required: true
+        default: 'Persian'
+        type: choice
+        options:
+          - 'Persian'
+          - 'English'
+          - 'Arabic'
+          - 'Turkish'
+          - 'German'
+          - 'French'
+          - 'Spanish'
+          - 'Italian'
+          - 'Russian'
+          - 'Hindi'
+          - 'Urdu'
+          - 'Chinese'
+          - 'Japanese'
+          - 'Korean'
+          - 'Portuguese'
+          - 'Dutch'
+          - 'Polish'
+          - 'Ukrainian'
+          - 'Azerbaijani'
+      chunk_seconds:
+        description: 'طول هر تکه — هر پروژه یک دقیقه اعتبار مصرف می‌کند، پس نزدیک ۶۰ ثانیه بهترین بازدهی است'
+        required: true
+        default: '55'
+        type: choice
+        options:
+          - '55'
+          - '50'
+          - '45'
+          - '40'
+          - '30'
+      parallel_chunks:
+        description: 'هم‌زمانی — چند پروژه با هم روی یک اکانت ساخته شود'
+        required: true
+        default: '3'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - '5'
+      max_chunks:
+        description: 'فقط تست — فقط N تکهٔ اول دوبله شود (0 = همه)'
+        required: false
+        default: '0'
+        type: string
+      max_accounts:
+        description: 'سقف اکانت‌های موقت (هر اکانت ~۳ تکه)'
+        required: false
+        default: '20'
+        type: string
+      otp_wait_seconds:
+        description: 'چند ثانیه برای کد ایمیل صبر شود'
+        required: false
+        default: '180'
+        type: string
+      allow_partial:
+        description: 'تکه‌های ناموفق را با سکوت پر کن و اجرا را شکست نده'
+        required: false
+        default: false
+        type: boolean
+      output_name:
+        description: 'نام فایل خروجی (خالی = نام ویدیو + کد زبان)'
+        required: false
+        default: ''
+        type: string
+      queue_group:
+        description: 'اختیاری — اجراهایی با این مقدار یکسان پشت سر هم می‌روند؛ خالی = موازی'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rask-dub-${{ inputs.queue_group != '' && inputs.queue_group || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  dub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ffmpeg
+        timeout-minutes: 8
+        run: |
+          set -e
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo "ffmpeg already installed"
+          else
+            sudo systemctl stop unattended-upgrades 2>/dev/null || true
+            for i in 1 2 3; do
+              echo "apt attempt $i"
+              if sudo timeout 180 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o DPkg::Lock::Timeout=60 update \
+                && sudo timeout 300 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o DPkg::Lock::Timeout=60 install -y --no-install-recommends ffmpeg; then
+                break
+              fi
+              if [ "$i" = "3" ]; then
+                echo "apt failed 3 times"
+                exit 1
+              fi
+              sleep 10
+            done
+          fi
+          ffmpeg -version | head -n 1
+
+      # Better chunk boundaries (cuts in pauses instead of mid-sentence).
+      # Optional: the runner falls back to ffmpeg silencedetect when absent.
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-base-rask
+
+      - name: Install Whisper (optional)
+        continue-on-error: true
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --quiet openai-whisper
+
+      - name: Dub
+        id: dub
+        env:
+          INPUT_URL: ${{ inputs.video_url }}
+          TARGET_LANG: ${{ inputs.target_lang }}
+          CHUNK_SECONDS: ${{ inputs.chunk_seconds }}
+          PARALLEL_CHUNKS: ${{ inputs.parallel_chunks }}
+          MAX_CHUNKS: ${{ inputs.max_chunks }}
+          MAX_ACCOUNTS: ${{ inputs.max_accounts }}
+          OTP_WAIT_SECONDS: ${{ inputs.otp_wait_seconds }}
+          ALLOW_PARTIAL: ${{ inputs.allow_partial }}
+          OUTPUT_NAME: ${{ inputs.output_name }}
+          # emailnator: 3 = ".Gmail" dot alias only
+          EMAILNATOR_IDS: '3'
+          EMAILNATOR_POLL_SECONDS: '4'
+          WORK_DIR: ${{ runner.temp }}/work
+        run: node scripts/run.mjs
+
+      - name: Upload output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rask-output
+          path: |
+            ${{ runner.temp }}/work/out
+            ${{ runner.temp }}/work/state.json
+          if-no-files-found: warn
+
+      - name: Link
+        if: always()
+        run: |
+          {
+            echo '### Result'
+            echo ''
+            echo "- file: \`${{ steps.dub.outputs.video_path }}\`"
+            echo "- duration: ${{ steps.dub.outputs.duration }}s"
+            echo "- chunks: ${{ steps.dub.outputs.chunks }}"
+            echo "- accounts: ${{ steps.dub.outputs.accounts }}"
+          } >> "$GITHUB_STEP_SUMMARY"
