@@ -14,9 +14,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import * as rask from './lib/rask.mjs';
 import * as emailnator from './lib/emailnator.mjs';
+import * as proxy from './lib/proxy.mjs';
+import { withProxy } from './lib/http.mjs';
 import {
   buildChunks, fitChunkAudio, concatDubbed, assembleFinal,
   probeDuration, silenceMp3, sh,
@@ -50,6 +53,8 @@ if (!INPUT) {
   console.error('INPUT_URL (or a local path) is required');
   process.exit(2);
 }
+
+proxy.assertConfigured();
 
 function setOutput(key, value) {
   if (!env.GITHUB_OUTPUT) return;
@@ -93,6 +98,7 @@ async function audioFromRask(mp4, outMp3) {
 }
 
 async function main() {
+  log(`[proxy] ${proxy.status()}`);
   const input = await resolveInput();
   const isVideo = await (async () => {
     const { stdout } = await sh('ffprobe', [
@@ -145,11 +151,16 @@ async function main() {
   const openAccount = async () => {
     if (accountsOpened >= MAX_ACCOUNTS) throw new Error(`hit MAX_ACCOUNTS=${MAX_ACCOUNTS} with ${pending.length} chunk(s) left`);
     accountsOpened += 1;
-    log(`[account] opening #${accountsOpened}`);
-    account = await rask.startAccount({ emailnator: { ...emailnator, waitForCode: (email, opts) => emailnator.waitForCode(email, { waitSeconds: OTP_WAIT_SECONDS, ...opts }) } });
-    serverLeft = rask.remaining(account.credits);
+    // One sticky exit IP for this account's whole life: signup, every API call
+    // and the upload all leave from here.
+    const exit = proxy.forIdentity(crypto.randomUUID());
+    log(`[account] opening #${accountsOpened}${exit ? ` via ${exit.label}` : ' (direct IP)'}`);
+    const acc = await withProxy(exit, () => rask.startAccount({ emailnator: { ...emailnator, waitForCode: (email, opts) => emailnator.waitForCode(email, { waitSeconds: OTP_WAIT_SECONDS, ...opts }) } }));
+    acc.proxy = exit;
+    account = acc;
+    serverLeft = rask.remaining(acc.credits);
     inFlight = 0;
-    return account;
+    return acc;
   };
 
   // Parallel workers must share ONE signup at a time: emailnator rate-limits
@@ -164,7 +175,7 @@ async function main() {
   };
 
   const creditsLeft = async (acc) => {
-    const credits = await rask.getCredits(acc.tokens);
+    const credits = await withProxy(acc.proxy, () => rask.getCredits(acc.tokens));
     const left = rask.remaining(credits);
     return left;
   };
@@ -199,7 +210,7 @@ async function main() {
     const slots = Math.min(serverLeft.minutes, serverLeft.videos) - inFlight;
     log(`[${name}] ${chunk.duration.toFixed(2)}s -> Rask (${slots} free slot(s) on ${acc.email})`);
     const started = Date.now();
-    const result = await rask.dubAudio({
+    const result = await withProxy(acc.proxy, () => rask.dubAudio({
       tokens: acc.tokens,
       spaceId: acc.spaceId,
       audioFile: chunk.path,
@@ -208,7 +219,7 @@ async function main() {
       workDir: path.join(WORK_DIR, 'rask'),
       // Called after the (free) upload, right before the project is created.
       beforeCreate: reserveSlot,
-    });
+    }));
 
     const raw = await audioFromRask(result.file, path.join(WORK_DIR, 'dub', `${name}-raw.mp3`));
     const fitted = path.join(WORK_DIR, 'dub', `${name}.mp3`);
@@ -303,6 +314,7 @@ async function main() {
     `| target | ${TARGET} |`,
     `| chunks | ${plan.length} |`,
     `| accounts | ${accountsOpened} |`,
+    `| proxy | ${proxy.enabled() ? 'on (oxylabs, sticky per account)' : 'off (runner IP)'} |`,
     `| size | ${sizeMb} MB |`,
     failures.size ? `\nFailed chunks: ${[...failures.keys()].join(', ')}` : '',
   ].join('\n'));

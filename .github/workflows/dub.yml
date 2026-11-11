@@ -98,6 +98,16 @@ on:
         required: false
         default: ''
         type: string
+      proxy_enabled:
+        description: 'پروکسی Oxylabs — true = هر اکانت با IP residential جدا، false = IP خود رانر'
+        required: true
+        default: true
+        type: boolean
+      proxy_countries:
+        description: 'کشور پروکسی (کد دو حرفی، با کاما) — auto = us,de,nl,gb'
+        required: false
+        default: 'auto'
+        type: string
 
 permissions:
   contents: read
@@ -171,6 +181,10 @@ jobs:
           # emailnator: 3 = ".Gmail" dot alias only
           EMAILNATOR_IDS: '3'
           EMAILNATOR_POLL_SECONDS: '4'
+          # Oxylabs residential proxy: one sticky exit IP per account.
+          PROXY_OXYLABS: ${{ secrets.PROXY_OXYLABS }}
+          PROXY_ENABLED: ${{ inputs.proxy_enabled }}
+          PROXY_COUNTRIES: ${{ inputs.proxy_countries == 'auto' && 'us,de,nl,gb' || inputs.proxy_countries }}
           WORK_DIR: ${{ runner.temp }}/work
         run: node scripts/run.mjs
 

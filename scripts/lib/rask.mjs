@@ -17,7 +17,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { requestJson, sleep, retry, HttpError, downloadFile } from './http.mjs';
+import { requestJson, requestText, sleep, retry, HttpError, downloadFile } from './http.mjs';
 
 export const COGNITO = {
   region: 'us-east-2',
@@ -77,20 +77,23 @@ export function randomPassword() {
 /* ------------------------------------------------------------------ */
 
 async function cognito(target, body) {
-  const res = await fetch(COGNITO.endpoint, {
+  // Goes through the same proxy context as the Rask calls, so one account is
+  // always signed up and used from one exit IP.
+  const { status, text } = await requestText(COGNITO.endpoint, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-amz-json-1.1',
       'x-amz-target': `AWSCognitoIdentityProviderService.${target}`,
     },
     body: JSON.stringify(body),
+    timeoutMs: 60_000,
+    label: `cognito ${target}`,
   });
-  const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* raw below */ }
-  if (!res.ok) {
+  if (!(status >= 200 && status < 300)) {
     const code = json?.__type || '';
-    const err = new HttpError(`cognito ${target}: ${res.status} ${text.slice(0, 200)}`, { status: res.status, body: text });
+    const err = new HttpError(`cognito ${target}: ${status} ${String(text).slice(0, 200)}`, { status, body: text });
     err.cognitoType = code.replace(/^.*#/, '');
     throw err;
   }
@@ -203,7 +206,12 @@ export async function uploadAudio(tokens, spaceId, filePath, name = path.basenam
   const type = MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
   const form = new FormData();
   form.append('data', new Blob([buf], { type }), name);
-  return api(`${RST}/api/library/v1/media?space_id=${spaceId}`, { method: 'POST', tokens, body: form });
+  return api(`${RST}/api/library/v1/media?space_id=${spaceId}`, {
+    method: 'POST',
+    tokens,
+    body: form,
+    timeoutMs: 5 * 60_000,
+  });
 }
 
 /** Create a dubbing project from an uploaded media id (audio-only uploads OK). */

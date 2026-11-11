@@ -51,6 +51,24 @@ INPUT_URL="https://example.com/video.mp4" TARGET_LANG=Persian PARALLEL_CHUNKS=3 
 | `ALLOW_PARTIAL` | `false` | تکهٔ ناموفق را با سکوت پر کن |
 | `OUTPUT_NAME` | خالی | نام فایل خروجی |
 | `WORK_DIR` | `work` | پوشهٔ کار و کش تکه‌ها |
+| `PROXY_OXYLABS` | خالی | پروکسی Oxylabs: `pr.oxylabs.io:7777:customer-resi_<ID>:<PASSWORD>` |
+| `PROXY_ENABLED` | خودکار | `false`/`0` = خاموش؛ خالی = اگر `PROXY_OXYLABS` ست شده باشد روشن |
+| `PROXY_COUNTRIES` | `us` | کشورهای خروجی، با کاما (`us,de,nl,gb`) |
+| `PROXY_SESSION_MINUTES` | `30` | مدت چسبیدن هر اکانت به همان IP |
+
+## پروکسی (اختیاری ولی توصیه‌شده)
+
+هر اکانت یک **IP residential چسبندهٔ جدا** می‌گیرد و از لحظهٔ ثبت‌نام تا آخرین
+پروژه‌اش با همان IP بیرون می‌رود:
+
+- ثبت‌نام/تأیید Cognito، همهٔ فراخوانی‌های `rst.rask.ai` و `app.rask.ai`،
+  و آپلود تکهٔ صدا → از پروکسی.
+- دانلود ویدیوی مبدأ و دانلود فایل دوبله‌شده (لینک امضاشدهٔ S3) → مستقیم،
+  تا پهنای باند residential صرف ویدیو نشود.
+
+اگر `PROXY_OXYLABS` ست نشده باشد، رانر با IP خودش کار می‌کند و در لاگ
+`[proxy] off — PROXY_OXYLABS is not set` چاپ می‌شود. اگر `PROXY_ENABLED=true`
+صریح داده شود ولی سکرت خالی باشد، اجرا همان اول با پیام واضح متوقف می‌شود.
 
 ## نکات
 
