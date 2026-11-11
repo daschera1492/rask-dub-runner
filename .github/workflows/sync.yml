@@ -34,6 +34,11 @@ on:
         required: false
         default: '0'
         type: string
+      allow_missing:
+        description: 'تکهٔ بادیالوگ که فایل دوبله ندارد را با سکوت پر کن (به‌جای شکست)'
+        required: false
+        default: false
+        type: boolean
       publish:
         description: 'ساخت Release با mp3 و mp4 جدا'
         required: false
@@ -74,6 +79,7 @@ jobs:
           INPUT_VIDEO: ${{ inputs.video_url }}
           INPUT_AUDIO: ${{ inputs.audio_url }}
           SEGMENTS_JSON: ${{ inputs.segments_json }}
+          ALLOW_MISSING: ${{ inputs.allow_missing }}
           OUTPUT_NAME: ${{ inputs.name }}
           AUDIO_OFFSET_MS: ${{ inputs.offset_ms }}
           AUDIO_BITRATE: '192k'

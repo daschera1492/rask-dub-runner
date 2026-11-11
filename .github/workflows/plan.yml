@@ -1,0 +1,98 @@
+# plan — تفکیک تکه‌های بادیالوگ از بیدیالوگ، با شماره‌گذاری دقیق.
+#
+# ورودی: یک ویدیو. خروجی: plan.json + پوشهٔ chunks/NNN.mp3
+#   - هر تکه‌ای که هر مقدار گفتار دارد نگه داشته می‌شود (حتی یک کلمه)
+#   - تکهٔ بدون گفتار با speech:false ثبت می‌شود و هیچ فایلی برایش ساخته نمی‌شود
+#   - مرزها داخل سکوت می‌افتند، نه وسط کلمه
+#   - کل تایم‌لاین پیوسته پوشش داده می‌شود: ۰ تا انتها
+#
+# این ورک‌فلو فقط تحلیل صدا است: هیچ تماس شبکه‌ای با سرویس دوبله ندارد.
+# برای چسباندن نتیجه روی ویدیو از ورک‌فلو «sync» استفاده کن.
+#
+# جزئیات: sync/README.md
+
+name: plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'لینک مستقیم ویدیو (mp4/mov/mkv)'
+        required: true
+        type: string
+      chunk_seconds:
+        description: 'حداکثر طول هر تکه (ثانیه)'
+        required: false
+        default: '55'
+        type: string
+      silence_db:
+        description: 'آستانهٔ سکوت (dB) — کمتر = سخت‌گیرتر'
+        required: false
+        default: '-35'
+        type: string
+      min_silence:
+        description: 'حداقل طول سکوت برای شکستن تکه (ثانیه)'
+        required: false
+        default: '0.35'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: ffmpeg
+        timeout-minutes: 12
+        working-directory: .
+        run: |
+          sed -i 's/\r$//' scripts/install-ffmpeg.sh
+          bash scripts/install-ffmpeg.sh
+
+      - name: plan
+        env:
+          INPUT_VIDEO: ${{ inputs.video_url }}
+          CHUNK_SECONDS: ${{ inputs.chunk_seconds }}
+          SILENCE_DB: ${{ inputs.silence_db }}
+          MIN_SILENCE: ${{ inputs.min_silence }}
+          OUT_DIR: out
+        run: node scripts/plan.mjs
+
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '### plan'
+            echo ''
+            for f in out/*.plan.json; do
+              [ -f "$f" ] || continue
+              echo '```json'
+              node -e "const p=require('./$f'); console.log(JSON.stringify(p.summary,null,2))"
+              echo '```'
+              echo ''
+              echo '| # | start | end | audio | speech |'
+              echo '| --- | --- | --- | --- | --- |'
+              node -e "const p=require('./$f'); for(const s of p.segments) console.log('| '+s.index+' | '+s.start+'s | '+s.end+'s | '+s.duration+'s | '+(s.speech?'yes':'—')+' |')"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-${{ github.run_number }}
+          path: |
+            sync/out/*.plan.json
+            sync/out/chunks/*.mp3
+          retention-days: 7
+          if-no-files-found: error

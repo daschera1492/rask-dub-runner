@@ -94,6 +94,26 @@ async function fromSegments(segs, totalSamples, dest, work) {
       cursor = at;
     }
 
+    // No dialogue in this slot: it stays silent on the timeline, nothing to dub.
+    if (seg.speech === false || !seg.file) {
+      const blank = join(work, `silence-${i}.wav`);
+      await silence(len, blank);
+      parts.push(blank);
+      cursor += len;
+      i += 1;
+      continue;
+    }
+
+    if (!existsSync(seg.file) && /^(1|true|yes)$/i.test(env.ALLOW_MISSING || '')) {
+      log(`warning: segment ${seg.index ?? i} has no dubbed file — keeping silence`);
+      const blank = join(work, `missing-${i}.wav`);
+      await silence(len, blank);
+      parts.push(blank);
+      cursor += len;
+      i += 1;
+      continue;
+    }
+
     const src = await materialize(seg.file, join(work, 'segments'), `seg-${i}`);
     const { seconds } = await audioInfo(src);
     const targetSec = len / SR;
@@ -189,8 +209,14 @@ async function main() {
 
   if (CFG.segments) {
     const raw = existsSync(CFG.segments) ? await readFile(CFG.segments, 'utf8') : CFG.segments;
-    const segs = JSON.parse(raw);
-    if (!Array.isArray(segs) || !segs.length) throw new Error('SEGMENTS_JSON must be a non-empty array of {start,end,file}');
+    const parsed = JSON.parse(raw);
+    const segs = Array.isArray(parsed) ? parsed : parsed.segments;
+    if (!Array.isArray(segs) || !segs.length) {
+      throw new Error('SEGMENTS_JSON must be an array of {start,end,file} or a plan.json with .segments');
+    }
+    if (!Array.isArray(parsed) && parsed.summary) {
+      log(`plan: ${parsed.summary.speech} speech / ${parsed.summary.silence} silence slots — ${parsed.summary.billedMinutes} min billed`);
+    }
     log(`segment mode: ${segs.length} segments`);
     await fromSegments(segs, totalSamples, master, work);
   } else {
