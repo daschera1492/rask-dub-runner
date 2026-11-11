@@ -300,6 +300,8 @@ async function main() {
   log(`[done] ${outFile} (${finalDuration.toFixed(2)}s, ${sizeMb} MB, ${accountsOpened} account(s))`);
 
   setOutput('video_path', outFile);
+  setOutput('audio_path', fullAudio);
+  setOutput('name', stem);
   setOutput('duration', finalDuration.toFixed(2));
   setOutput('accounts', String(accountsOpened));
   setOutput('chunks', String(plan.length));

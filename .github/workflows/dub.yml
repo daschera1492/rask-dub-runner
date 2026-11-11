@@ -98,6 +98,11 @@ on:
         required: false
         default: ''
         type: string
+      publish:
+        description: 'در پایان، mp3 و mp4 را جدا روی Release بگذار (حذف خودکار بعد از ۳۰ روز)'
+        required: false
+        default: true
+        type: boolean
       proxy_enabled:
         description: 'پروکسی Oxylabs — true = هر اکانت با IP residential جدا، false = IP خود رانر'
         required: true
@@ -110,7 +115,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: rask-dub-${{ inputs.queue_group != '' && inputs.queue_group || github.run_id }}
@@ -200,6 +205,26 @@ jobs:
             ${{ runner.temp }}/work/state.json
           if-no-files-found: warn
 
+      # mp3 و mp4 جدا روی Release می‌روند:
+      #   - mp4: تصویر همان خروجی دوبله، با -c:v copy
+      #   - mp3: صدای دوبله، دقیقاً هم‌طول ویدیو (sample-accurate، drift صفر)
+      # حذف: ورک‌فلو «cleanup» هر روز ریلیزهای قدیمی‌تر از RETENTION_DAYS را پاک می‌کند.
+      - name: Publish release (mp3 + mp4)
+        if: ${{ inputs.publish && contains(steps.dub.outputs.video_path, '.mp4') }}
+        env:
+          INPUT_VIDEO: ${{ steps.dub.outputs.video_path }}
+          INPUT_AUDIO: ${{ steps.dub.outputs.audio_path }}
+          OUTPUT_NAME: ${{ steps.dub.outputs.name }}
+          AUDIO_OFFSET_MS: '0'
+          RELEASE: '1'
+          RELEASE_TAG: sync-${{ github.run_number }}
+          RELEASE_TITLE: ${{ steps.dub.outputs.name }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORK_DIR: ${{ runner.temp }}/sync-work
+          OUT_DIR: ${{ runner.temp }}/sync-out
+        run: node sync/scripts/sync.mjs
+
       - name: Link
         if: always()
         run: |
@@ -210,4 +235,7 @@ jobs:
             echo "- duration: ${{ steps.dub.outputs.duration }}s"
             echo "- chunks: ${{ steps.dub.outputs.chunks }}"
             echo "- accounts: ${{ steps.dub.outputs.accounts }}"
+            if [ -n "${{ steps.dub.outputs.video_path }}" ] && [ "${{ inputs.publish }}" = "true" ]; then
+              echo "- release: https://github.com/${{ github.repository }}/releases/tag/sync-${{ github.run_number }}"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
