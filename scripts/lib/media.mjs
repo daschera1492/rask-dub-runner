@@ -231,6 +231,63 @@ export async function cutChunk(input, start, end, outBase, { video = false } = {
 }
 
 /**
+ * Cut one span of the *original* audio into the same MP3 format the dubbed
+ * chunks use, so both kinds can be concatenated in one pass.
+ *
+ * This is what fills the slot of a chunk that was never sent for dubbing: the
+ * music and sound effects stay exactly as they were, and the timeline does not
+ * move. A silent span simply stays silent.
+ *
+ * @param {string} input  Source media.
+ * @param {number} start  Start in seconds.
+ * @param {number} end    End in seconds.
+ * @param {string} outFile Destination .mp3.
+ * @returns {Promise<string>}
+ */
+export async function cutOriginalAudio(input, start, end, outFile) {
+  fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  const length = Math.max(0.2, end - start);
+  await sh('ffmpeg', [
+    '-y', '-v', 'error',
+    '-ss', start.toFixed(3),
+    '-i', input,
+    '-t', length.toFixed(3),
+    '-vn',
+    '-ac', '2', '-ar', '44100',
+    // Same pad/trim as fitChunkAudio: the slot must be exactly as long as the
+    // source span, otherwise every following chunk drifts.
+    '-af', `apad=whole_dur=${length.toFixed(3)},atrim=0:${length.toFixed(3)}`,
+    '-c:a', 'libmp3lame', '-q:a', '2',
+    outFile,
+  ]);
+  return outFile;
+}
+
+/**
+ * Decide whether one chunk carries dialogue, using Whisper's word timestamps.
+ *
+ * Returns `null` for hasSpeech when there is no transcription at all, which
+ * means "unknown" — the caller must keep sending the chunk, so a missing
+ * Whisper never silently drops real speech.
+ *
+ * @param {Array<{start:number,end:number,word:string}>} words
+ * @param {number} start chunk start in seconds
+ * @param {number} end chunk end in seconds
+ * @param {number} minSpeech seconds of real speech required
+ */
+export function classifySpeech(words, start, end, minSpeech = 0.4) {
+  if (!words || !words.length) return { speech: null, hasSpeech: null };
+  const inChunk = words.filter((w) => w.end > start && w.start < end);
+  if (!inChunk.length) return { speech: 0, hasSpeech: false };
+  // A transcript that is nothing but "Thank you." / "[Music]" is a Whisper
+  // hallucination, not dialogue.
+  if (isJunkPhrase(inChunk.map((w) => w.word).join(' '))) return { speech: 0, hasSpeech: false };
+  const real = inChunk.filter((w) => !isJunkWord(w.word));
+  const speech = round(speechSeconds(real, start, end));
+  return { speech, hasSpeech: speech >= minSpeech };
+}
+
+/**
  * Word timestamps from Whisper (Python CLI bridge).
  * @returns {Promise<Array<{start:number,end:number,word:string}>>}
  */
@@ -242,6 +299,44 @@ export async function whisperWords(wavPath, { model = 'base', language = 'Auto' 
   await sh(py, [script, model, wavPath, outJson, language], { timeoutMs: 60 * 60 * 1000 });
   const parsed = JSON.parse(fs.readFileSync(outJson, 'utf8'));
   return Array.isArray(parsed.words) ? parsed.words : [];
+}
+
+/**
+ * Whisper hallucinates on music and silence (it happily returns "Thank you."
+ * for ten seconds of nothing). A word only counts as speech when it is not one
+ * of those filler phrases, and a chunk only counts as dialogue when at least
+ * MIN_SPEECH_SECONDS of it is real speech.
+ */
+const JUNK_WORD = /^(thank you|thanks|thanks for watching|please subscribe|subscribe|\[?music\]?|\(music\)|♪+|\.|,|!|\?|-|…)$/i;
+
+function isJunkWord(text) {
+  return JUNK_WORD.test(String(text || '').trim());
+}
+
+/**
+ * Whisper splits its hallucinated filler into separate tokens ("Thank" +
+ * "you."), so a per-word check misses it. A chunk whose *entire* transcript is
+ * filler therefore gets its own check.
+ */
+function isJunkPhrase(text) {
+  const flat = String(text || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!flat) return true;
+  return /^(?:(?:thank you|thanks|thanks for watching|please subscribe|subscribe|music)\s*)+$/.test(flat);
+}
+
+/** Seconds of `words` that fall inside [start, end). Overlap, not word starts. */
+function speechSeconds(words, start, end) {
+  let total = 0;
+  for (const w of words) {
+    const from = Math.max(start, w.start);
+    const to = Math.min(end, w.end);
+    if (to > from) total += to - from;
+  }
+  return total;
 }
 
 function planCuts(words, duration, maxSeconds, hardCap, minChunk = 8) {
@@ -293,6 +388,7 @@ export async function buildChunks(input, outDir, {
   sourceLanguage = 'Auto',
   video = false,
   single = false,
+  minSpeech = 0.4,
 } = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   const duration = await probeDuration(input);
@@ -301,18 +397,26 @@ export async function buildChunks(input, outDir, {
   // Diagnostic path: upload the untouched source as one project, exactly like
   // a human uploading the file on the site.
   if (single) {
-    const chunk = { index: 0, start: 0, end: round(duration), duration: round(duration), path: input, video };
+    // Unknown, not "no speech": a short file is one chunk and the operator
+    // already knows whether it has dialogue, so it is always sent.
+    const chunk = {
+      index: 0, start: 0, end: round(duration), duration: round(duration),
+      path: input, video, speech: null, hasSpeech: null,
+    };
     console.log(`[chunk] single untouched file 0.00s - ${duration.toFixed(2)}s`);
     return { duration, chunks: [chunk] };
   }
 
   let cuts = [];
+  // Kept outside the branch on purpose: the per-chunk speech check reuses these
+  // exact timestamps, so finding the cut points and knowing which chunks carry
+  // dialogue costs a single Whisper pass instead of two.
+  let words = [];
   if (duration > hardCap) {
     const wav = path.join(outDir, 'source-16k.wav');
     console.log('[chunk] extracting audio for Whisper');
     await extractForWhisper(input, wav);
 
-    let words = [];
     try {
       console.log(`[chunk] Whisper (${whisperModel}) word timestamps`);
       words = await whisperWords(wav, { model: whisperModel, language: sourceLanguage });
@@ -343,8 +447,17 @@ export async function buildChunks(input, outDir, {
     let end = Math.min(duration, bounds[i + 1] + (i === bounds.length - 2 ? 0 : padSeconds));
     if (end - start > hardCap + 0.5) end = start + hardCap;
     const file = await cutChunk(input, start, end, path.join(outDir, `chunk-${String(i).padStart(3, '0')}`), { video });
-    chunks.push({ index: i, start: round(start), end: round(end), duration: round(end - start), path: file, video });
-    console.log(`[chunk] #${i} ${start.toFixed(2)}s - ${end.toFixed(2)}s (${(end - start).toFixed(2)}s)`);
+
+    // `null` means "unknown" (Whisper never ran, e.g. a short file or a failed
+    // pip install); those chunks are still sent, so behaviour is unchanged.
+    const { speech, hasSpeech } = classifySpeech(words, start, end, minSpeech);
+
+    chunks.push({
+      index: i, start: round(start), end: round(end), duration: round(end - start),
+      path: file, video, speech, hasSpeech,
+    });
+    const tag = hasSpeech === false ? ' (no dialogue - not uploaded)' : hasSpeech === null ? ' (speech unknown)' : '';
+    console.log(`[chunk] #${i} ${start.toFixed(2)}s - ${end.toFixed(2)}s (${(end - start).toFixed(2)}s, speech ${speech === null ? '?' : speech.toFixed(2)}s)${tag}`);
   }
   return { duration, chunks };
 }

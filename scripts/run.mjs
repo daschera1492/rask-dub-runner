@@ -22,7 +22,7 @@ import * as proxy from './lib/proxy.mjs';
 import { withProxy } from './lib/http.mjs';
 import {
   buildChunks, fitChunkAudio, concatDubbed, assembleFinal,
-  probeDuration, silenceMp3, sh,
+  probeDuration, silenceMp3, sh, cutOriginalAudio,
 } from './lib/media.mjs';
 
 const env = process.env;
@@ -45,6 +45,10 @@ const CHUNK_TRIES = Math.max(1, Math.min(5, Number(env.CHUNK_TRIES || 3)));
 const MAX_CHUNKS = Math.max(0, Number(env.MAX_CHUNKS || 0)); // diagnostic runs
 const ALLOW_PARTIAL = ['1', 'true', 'yes'].includes(String(env.ALLOW_PARTIAL || '').toLowerCase());
 const OUTPUT_NAME = (env.OUTPUT_NAME || '').trim();
+// A chunk needs at least this much real speech to be worth a paid project.
+const MIN_SPEECH_SECONDS = Math.max(0, Number(env.MIN_SPEECH_SECONDS || 0.4));
+// Skip uploading chunks that Whisper found no dialogue in.
+const SKIP_SILENT = !['0', 'false', 'no', 'off'].includes(String(env.SKIP_SILENT || '1').toLowerCase());
 
 const STARTED = new Date();
 const log = (msg) => console.log(`${new Date().toISOString()} ${msg}`);
@@ -115,6 +119,7 @@ async function main() {
     hardCap: HARD_CAP_SECONDS,
     video: false,
     single: !isVideo,
+    minSpeech: MIN_SPEECH_SECONDS,
   });
 
   const plan = MAX_CHUNKS ? chunks.slice(0, MAX_CHUNKS) : chunks;
@@ -122,11 +127,29 @@ async function main() {
 
   fs.mkdirSync(path.join(WORK_DIR, 'dub'), { recursive: true });
 
+  // A chunk with no dialogue costs nothing to "dub": its original audio is put
+  // back at merge time, so the music and the timeline stay untouched. Record
+  // it in the state file so a re-run does not try it again.
+  const noDialogue = SKIP_SILENT
+    ? plan.filter((c) => c.hasSpeech === false && !state.chunks[c.index]?.skipped)
+    : [];
+  for (const c of noDialogue) {
+    state.chunks[c.index] = {
+      skipped: true, reason: 'no dialogue', start: c.start, end: c.end, duration: c.duration,
+    };
+  }
+  if (noDialogue.length) {
+    saveState(state);
+    log(`[plan] ${noDialogue.length} chunk(s) have no dialogue - not uploaded, original audio kept`);
+  }
+
   const pending = plan.filter((c) => {
     const saved = state.chunks[c.index];
+    if (saved?.skipped) return false;
     return !(saved?.file && fs.existsSync(saved.file) && saved.done);
   });
   if (plan.length !== chunks.length) log(`[plan] diagnostic cap: ${plan.length}/${chunks.length} chunks`);
+  if (!pending.length) log('[plan] nothing to dub - the output keeps the original audio');
   log(`[plan] ${pending.length} chunk(s) left to dub`);
 
   let account = null;
@@ -271,17 +294,30 @@ async function main() {
 
   await Promise.all(Array.from({ length: Math.min(PARALLEL_CHUNKS, Math.max(1, pending.length)) }, worker));
 
-  // Assemble: dubbed chunks in index order, missing ones silent (if allowed).
-  const ordered = plan.map((chunk) => {
+  // Assemble in chunk order. Three cases, in priority order:
+  //   1. a dubbed file exists            -> use it
+  //   2. the chunk was skipped (no speech) -> put its ORIGINAL audio back, so
+  //      music and effects survive and the timeline does not move
+  //   3. the chunk genuinely failed      -> silence, but only if ALLOW_PARTIAL
+  const ordered = await Promise.all(plan.map(async (chunk) => {
     const saved = state.chunks[chunk.index];
     if (saved?.file && fs.existsSync(saved.file)) return saved.file;
-    if (!ALLOW_PARTIAL) throw new Error(`chunk ${chunk.index} has no dub (set ALLOW_PARTIAL=1 to pad with silence)`);
+
+    if (saved?.skipped) {
+      const keep = path.join(WORK_DIR, 'dub', `chunk-${String(chunk.index).padStart(3, '0')}-original.mp3`);
+      if (!fs.existsSync(keep)) {
+        await cutOriginalAudio(input, chunk.start, chunk.end, keep);
+        log(`[mix] chunk ${chunk.index}: no dialogue, original audio kept`);
+      }
+      return keep;
+    }
+
+    if (!ALLOW_PARTIAL) {
+      throw new Error(`chunk ${chunk.index} has no dub (set ALLOW_PARTIAL=1 to pad with silence)`);
+    }
     const blank = path.join(WORK_DIR, 'dub', `chunk-${String(chunk.index).padStart(3, '0')}-silence.mp3`);
+    if (!fs.existsSync(blank)) await silenceMp3(chunk.duration, blank);
     return blank;
-  });
-  await Promise.all(plan.map(async (chunk, i) => {
-    if (fs.existsSync(ordered[i])) return;
-    await silenceMp3(chunk.duration, ordered[i]);
   }));
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -304,6 +340,9 @@ async function main() {
   setOutput('accounts', String(accountsOpened));
   setOutput('chunks', String(plan.length));
 
+  const skippedCount = plan.filter((c) => state.chunks[c.index]?.skipped).length;
+  const dubbedCount = plan.filter((c) => state.chunks[c.index]?.done).length;
+
   summary([
     '## Rask dub finished',
     '',
@@ -313,6 +352,8 @@ async function main() {
     `| duration | ${finalDuration.toFixed(2)}s |`,
     `| target | ${TARGET} |`,
     `| chunks | ${plan.length} |`,
+    `| dubbed | ${dubbedCount} |`,
+    `| no dialogue (not uploaded) | ${skippedCount} |`,
     `| accounts | ${accountsOpened} |`,
     `| proxy | ${proxy.enabled() ? 'on (oxylabs, sticky per account)' : 'off (runner IP)'} |`,
     `| size | ${sizeMb} MB |`,
