@@ -125,17 +125,21 @@ async function main() {
 
   let account = null;
   let accountsOpened = 0;
-  // Projects this account may still start. A minute is billed per project, so
-  // this is the only number that must never overshoot: parallel workers all
-  // reserve from it before creating anything.
-  let budget = 0;
+  // A project costs one minute, so the account's remaining minutes are the hard
+  // limit. `serverLeft` is refreshed from /api/user; `inFlight` counts projects
+  // already created but not finished. Slots = min(minutes, videos) - inFlight,
+  // so parallel workers can never overshoot, yet a spare minute left over after
+  // the first batch is still used instead of throwing the account away.
+  let serverLeft = { minutes: 0, videos: 0 };
+  let inFlight = 0;
   const failures = new Map();
 
   const retire = (why) => {
     if (!account) return;
     log(`[account] retiring ${account.email}: ${why}`);
     account = null;
-    budget = 0;
+    serverLeft = { minutes: 0, videos: 0 };
+    inFlight = 0;
   };
 
   const openAccount = async () => {
@@ -143,8 +147,8 @@ async function main() {
     accountsOpened += 1;
     log(`[account] opening #${accountsOpened}`);
     account = await rask.startAccount({ emailnator: { ...emailnator, waitForCode: (email, opts) => emailnator.waitForCode(email, { waitSeconds: OTP_WAIT_SECONDS, ...opts }) } });
-    const left = rask.remaining(account.credits);
-    budget = Math.max(0, Math.min(left.minutes, left.videos));
+    serverLeft = rask.remaining(account.credits);
+    inFlight = 0;
     return account;
   };
 
@@ -165,27 +169,45 @@ async function main() {
     return left;
   };
 
+  /**
+   * Reserve one project slot for this account. Waits while other projects are
+   * still running (their minutes may already be charged), and only gives the
+   * account up when the server says nothing is left and nothing is pending.
+   */
+  const reserveSlot = async () => {
+    for (let i = 0; i < 120; i++) {
+      const slots = Math.min(serverLeft.minutes, serverLeft.videos) - inFlight;
+      if (slots >= 1) {
+        inFlight += 1;
+        return;
+      }
+      if (inFlight === 0) {
+        retire('out of minutes');
+        throw new Error('retry on a fresh account');
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    retire('waited too long for a free slot');
+    throw new Error('retry on a fresh account');
+  };
+
   const dubOne = async (chunk) => {
     const name = `chunk-${String(chunk.index).padStart(3, '0')}`;
     await ensureAccount();
+    const acc = account;
 
-    log(`[${name}] ${chunk.duration.toFixed(2)}s -> Rask (${budget} project slot(s) left on ${account.email})`);
+    const slots = Math.min(serverLeft.minutes, serverLeft.videos) - inFlight;
+    log(`[${name}] ${chunk.duration.toFixed(2)}s -> Rask (${slots} free slot(s) on ${acc.email})`);
     const started = Date.now();
     const result = await rask.dubAudio({
-      tokens: account.tokens,
-      spaceId: account.spaceId,
+      tokens: acc.tokens,
+      spaceId: acc.spaceId,
       audioFile: chunk.path,
       name,
       dstLang: TARGET,
       workDir: path.join(WORK_DIR, 'rask'),
       // Called after the (free) upload, right before the project is created.
-      beforeCreate: () => {
-        if (budget < 1) {
-          retire('budget spent');
-          throw new Error('retry on a fresh account');
-        }
-        budget -= 1;
-      },
+      beforeCreate: reserveSlot,
     });
 
     const raw = await audioFromRask(result.file, path.join(WORK_DIR, 'dub', `${name}-raw.mp3`));
@@ -202,11 +224,12 @@ async function main() {
     log(`[${name}] ready in ${state.chunks[chunk.index].seconds}s`);
 
     // Sync with the server: it is the source of truth after a project.
-    try {
-      const after = await creditsLeft(account);
-      budget = Math.min(budget, after.minutes, after.videos);
-      if (budget < 1) retire(`used up (${JSON.stringify(after)})`);
-    } catch { /* non-fatal */ }
+    inFlight = Math.max(0, inFlight - 1);
+    if (account === acc) {
+      try {
+        serverLeft = await creditsLeft(acc);
+      } catch { /* keep the previous estimate */ }
+    }
   };
 
   // Work through the queue with a small pool of workers sharing one account.
