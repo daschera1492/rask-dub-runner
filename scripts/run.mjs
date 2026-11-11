@@ -286,6 +286,14 @@ async function main() {
     if (!ALLOW_PARTIAL) {
       throw new Error(`chunk(s) ${list} have no dub (leave ALLOW_PARTIAL on to publish with silence there)`);
     }
+    // Publishing a track where nothing was dubbed would be a silent video sold as
+    // a dub, so that case still fails.
+    if (missing.length === plan.length) {
+      throw new Error(`no chunk was dubbed (0 of ${plan.length}) — nothing to publish`);
+    }
+    if (missing.length > plan.length / 2) {
+      log(`[assemble] WARNING: more than half the timeline is silent (${missing.length}/${plan.length})`);
+    }
     log('[assemble] keeping silence in those slots and publishing the rest');
   } else {
     log(`[assemble] all ${plan.length} chunk(s) dubbed`);
@@ -327,10 +335,11 @@ async function main() {
   setOutput('complete', missing.length ? 'false' : 'true');
 
   const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  const cell = (v) => String(v).replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim();
   const missingRows = missing.map((c) => {
     const at = Number.isFinite(c.start) ? fmt(c.start) : '?';
-    const why = failures.get(c.index) ? ` — ${failures.get(c.index)}` : '';
-    return `| ${c.index} | ${at} | ${Number(c.duration || 0).toFixed(1)}s | ${why || 'no dub'} |`;
+    const why = failures.get(c.index);
+    return `| ${c.index} | ${at} | ${Number(c.duration || 0).toFixed(1)}s | ${cell(why || 'no dub')} |`;
   });
 
   summary([
