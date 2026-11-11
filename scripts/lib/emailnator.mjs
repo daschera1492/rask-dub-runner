@@ -47,15 +47,19 @@ const REQUEST_TIMEOUT_MS = clampi(Number(process.env.EMAILNATOR_TIMEOUT_SECONDS 
 // any sender, which is fine because every identity is a brand-new address.
 const FROM_FILTER = (process.env.EMAILNATOR_FROM_MATCH || '').trim();
 const FROM_RE = FROM_FILTER ? new RegExp(FROM_FILTER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+// emailnator throttles whole IP ranges: from a cloud runner the polls get 429/503
+// non-stop. With EMAILNATOR_PROXY=1 the inbox calls ride the account's sticky
+// residential proxy instead of the runner IP.
+const VIA_PROXY = ['1', 'true', 'yes', 'on'].includes(String(process.env.EMAILNATOR_PROXY || '').trim().toLowerCase());
 
 function api(path, { method = 'GET', body, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   return requestJson(BASE + path, {
     method,
     body,
     timeoutMs,
-    // Our helper (emailnator) is not the target site: never spend residential
-    // proxy bandwidth on it, and keep one stable IP for the inbox polls.
-    direct: true,
+    // Our helper (emailnator) is not the target site: by default never spend
+    // residential proxy bandwidth on it, and keep one stable IP for the polls.
+    direct: !VIA_PROXY,
     headers: {
       accept: 'application/json',
       referer: `${BASE}/`,

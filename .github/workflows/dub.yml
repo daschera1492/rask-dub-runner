@@ -181,6 +181,8 @@ jobs:
           # emailnator: 3 = ".Gmail" dot alias only
           EMAILNATOR_IDS: '3'
           EMAILNATOR_POLL_SECONDS: '4'
+          # Cloud runner IPs are throttled by emailnator; ride the proxy.
+          EMAILNATOR_PROXY: ${{ inputs.proxy_enabled && '1' || '0' }}
           # Oxylabs residential proxy: one sticky exit IP per account.
           PROXY_OXYLABS: ${{ secrets.PROXY_OXYLABS }}
           PROXY_ENABLED: ${{ inputs.proxy_enabled }}

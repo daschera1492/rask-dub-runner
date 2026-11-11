@@ -55,6 +55,7 @@ INPUT_URL="https://example.com/video.mp4" TARGET_LANG=Persian PARALLEL_CHUNKS=3 
 | `PROXY_ENABLED` | خودکار | `false`/`0` = خاموش؛ خالی = اگر `PROXY_OXYLABS` ست شده باشد روشن |
 | `PROXY_COUNTRIES` | `us` | کشورهای خروجی، با کاما (`us,de,nl,gb`) |
 | `PROXY_SESSION_MINUTES` | `30` | مدت چسبیدن هر اکانت به همان IP |
+| `EMAILNATOR_PROXY` | `0` | `1` = تماس‌های emailnator هم از پروکسی (برای رانر ابری لازم است) |
 
 ## پروکسی (اختیاری ولی توصیه‌شده)
 
