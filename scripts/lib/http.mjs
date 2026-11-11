@@ -240,8 +240,22 @@ export async function requestText(url, {
     payload = encoded.body;
     finalHeaders['content-type'] = encoded.contentType;
   } else if (payload instanceof Blob) {
-    payload = Buffer.from(await payload.arrayBuffer());
     if (payload.type && !finalHeaders['content-type']) finalHeaders['content-type'] = payload.type;
+    payload = Buffer.from(await payload.arrayBuffer());
+  } else if (payload instanceof URLSearchParams) {
+    payload = payload.toString();
+    if (!finalHeaders['content-type']) finalHeaders['content-type'] = 'application/x-www-form-urlencoded';
+  } else if (
+    payload !== undefined
+    && payload !== null
+    && typeof payload === 'object'
+    && !Buffer.isBuffer(payload)
+    && !(payload instanceof ArrayBuffer)
+    && !ArrayBuffer.isView(payload)
+  ) {
+    // Plain objects are JSON; the raw proxy client only writes strings/Buffers.
+    payload = JSON.stringify(payload);
+    if (!finalHeaders['content-type']) finalHeaders['content-type'] = 'application/json';
   }
 
   const proxy = direct ? null : activeProxy();
