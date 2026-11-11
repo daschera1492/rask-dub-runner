@@ -211,6 +211,9 @@ export async function uploadAudio(tokens, spaceId, filePath, name = path.basenam
     tokens,
     body: form,
     timeoutMs: 5 * 60_000,
+    // Media never rides the metered residential proxy: the upload leaves from
+    // the runner's own connection, exactly like the downloads do.
+    direct: true,
   });
 }
 
