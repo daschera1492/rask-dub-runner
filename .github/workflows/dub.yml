@@ -139,7 +139,9 @@ jobs:
 
       - name: Install ffmpeg
         timeout-minutes: 12
-        run: bash scripts/install-ffmpeg.sh
+        run: |
+          sed -i 's/\r$//' scripts/install-ffmpeg.sh
+          bash scripts/install-ffmpeg.sh
 
       # Better chunk boundaries (cuts in pauses instead of mid-sentence).
       # Optional: the runner falls back to ffmpeg silencedetect when absent.

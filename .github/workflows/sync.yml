@@ -65,7 +65,9 @@ jobs:
       - name: ffmpeg
         timeout-minutes: 12
         working-directory: .
-        run: bash scripts/install-ffmpeg.sh
+        run: |
+          sed -i 's/\r$//' scripts/install-ffmpeg.sh
+          bash scripts/install-ffmpeg.sh
 
       - name: sync
         env:
