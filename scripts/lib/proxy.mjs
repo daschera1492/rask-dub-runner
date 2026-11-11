@@ -110,16 +110,30 @@ export function forIdentity(identityId) {
   if (!ENABLED) return null;
 
   const country = pickCountry(identityId ?? crypto.randomUUID());
-  const session = crypto.randomBytes(4).toString('hex');
-  const username = `${SPEC.username}-cc-${country}-sessid-${session}-sesstime-${SESSION_MINUTES}`;
 
-  return {
-    host: SPEC.host,
-    port: SPEC.port,
-    username,
-    password: SPEC.password,
-    country,
-    session,
-    label: `oxylabs ${country}/${session}`,
+  const make = () => {
+    const session = crypto.randomBytes(4).toString('hex');
+    return {
+      host: SPEC.host,
+      port: SPEC.port,
+      username: `${SPEC.username}-cc-${country}-sessid-${session}-sesstime-${SESSION_MINUTES}`,
+      password: SPEC.password,
+      country,
+      session,
+      label: `oxylabs ${country}/${session}`,
+    };
   };
+
+  const proxy = make();
+  // A residential exit can go bad mid-run (502 on CONNECT, dead socket). The
+  // account keeps its country but moves to a fresh sticky session in place, so
+  // the object stored in the async context (and on the account) stays valid.
+  proxy.rotate = () => {
+    const next = make();
+    proxy.username = next.username;
+    proxy.session = next.session;
+    proxy.label = next.label;
+    return proxy;
+  };
+  return proxy;
 }

@@ -244,6 +244,34 @@ function retryAfterMs(headers) {
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
 }
 
+/** Failures that come from the tunnel/exit IP, not from the target site. */
+function isProxyFailure(err) {
+  const msg = String(err?.message || '');
+  return /proxy CONNECT .* failed|proxy .* timed out|proxy TLS handshake|proxy timeout|socket hang up|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT/i.test(msg);
+}
+
+/**
+ * Residential exits drop connections now and then (Oxylabs answers the CONNECT
+ * with 502). Rotating the sticky session and retrying is cheap; surfacing the
+ * error is not, because it aborts a whole account's work.
+ */
+async function proxiedWithRotation(url, opts) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await proxiedRequest(url, opts);
+    } catch (err) {
+      lastError = err;
+      if (!isProxyFailure(err) || attempt === 3) break;
+      console.warn(`[proxy] ${String(err.message).slice(0, 120)} — rotating exit`);
+      try { opts.proxy.rotate?.(); } catch { /* keep going */ }
+      await sleep(800 * attempt);
+    }
+  }
+  if (isProxyFailure(lastError)) lastError.proxyFailure = true;
+  throw lastError;
+}
+
 /**
  * One HTTP exchange, returning the raw text. Honours the ambient proxy unless
  * `direct` is set. Bodies: undefined | string | Buffer | FormData | Blob.
@@ -288,7 +316,7 @@ export async function requestText(url, {
     // fetch() always sends a user-agent; the raw client must match it so the
     // site sees the same client, just from another IP.
     const proxiedHeaders = { 'user-agent': 'undici', ...finalHeaders };
-    const { status, headers: responseHeaders, text } = await proxiedRequest(url, {
+    const { status, headers: responseHeaders, text } = await proxiedWithRotation(url, {
       method, headers: proxiedHeaders, body: payload, timeoutMs, proxy,
     });
     return { status, headers: responseHeaders, text, label };
