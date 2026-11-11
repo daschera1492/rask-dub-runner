@@ -23,11 +23,35 @@ export async function materialize(src, dir, label) {
   const guess = decodeURIComponent(new URL(src).pathname.split('/').pop() || `${label}.bin`);
   const dest = resolve(dir, `${label}-${basename(guess) || `${label}.bin`}`);
 
-  const res = await fetch(src, { redirect: 'follow' });
-  if (!res.ok) throw new Error(`download ${src} failed: HTTP ${res.status}`);
-  if (!res.body) throw new Error(`download ${src} returned an empty body`);
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(dest));
-  return dest;
+  // 3 attempts: file hosts routinely drop the first connection from a datacenter IP.
+  let last;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const res = await fetch(src, { redirect: 'follow' });
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      if (!res.body) throw new Error('empty body');
+
+      const total = Number(res.headers.get('content-length') || 0);
+      let got = 0;
+      let lastPct = -1;
+      const body = Readable.fromWeb(res.body);
+      body.on('data', (chunk) => {
+        got += chunk.length;
+        if (!total) return;
+        const pct = Math.floor((got / total) * 100);
+        if (pct >= lastPct + 20) { lastPct = pct; console.log(`[fetch] ${label}: ${pct}% of ${(total / 1048576).toFixed(1)} MB`); }
+      });
+      await pipeline(body, createWriteStream(dest));
+      if (total && got !== total) throw new Error(`truncated: ${got}/${total} bytes`);
+      return dest;
+    } catch (err) {
+      last = err;
+      const cause = err.cause?.code || err.cause?.message;
+      console.warn(`[fetch] ${label}: attempt ${attempt} failed — ${err.message}${cause ? ` (${cause})` : ''}`);
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 3000 * attempt));
+    }
+  }
+  throw new Error(`download ${src} failed after 3 attempts: ${last?.message}${last?.cause?.code ? ` (${last.cause.code})` : ''}`);
 }
 
 /** Duration of the video stream in milliseconds, preferring exact stream/frame data. */

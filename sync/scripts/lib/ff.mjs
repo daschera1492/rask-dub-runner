@@ -28,10 +28,10 @@ export function run(bin, args) {
     p.stdout.on('data', (d) => { out += d; });
     p.stderr.on('data', (d) => { err += d; });
     p.on('error', reject);
-    p.on('close', (code) => {
+    p.on('close', (code, signal) => {
       if (code === 0) return resolve({ out, err });
       const tail = err.trim().split(/\r?\n/).slice(-25).join('\n');
-      reject(new Error(`${basename(bin)} exited ${code}\n  args: ${args.join(' ')}\n${tail}`));
+      reject(new Error(`${basename(bin)} exited ${code}${signal ? ` (signal ${signal})` : ''}\n  args: ${args.join(' ')}\n${tail || '  (no stderr output)'}`));
     });
   });
 }

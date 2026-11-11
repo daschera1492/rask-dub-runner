@@ -19,7 +19,7 @@
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { FFMPEG, probe, run } from './lib/ff.mjs';
-import { CH, SR, stripExt, videoDurationMs } from './lib/media.mjs';
+import { CH, SR, materialize, stripExt, videoDurationMs } from './lib/media.mjs';
 
 const env = process.env;
 const CFG = {
@@ -119,7 +119,12 @@ function buildTimeline(speech, duration) {
 async function main() {
   if (!CFG.input) throw new Error('INPUT_VIDEO (or INPUT_AUDIO) is required');
 
-  const duration = await durationOf(CFG.input);
+  // Download first when given a URL: probing a remote file hides the real error
+  // (a blocked host just looks like "ffprobe exited null").
+  const input = await materialize(CFG.input, join(CFG.outDir, 'src'), 'input');
+  if (input !== resolve(CFG.input)) log(`downloaded ${CFG.input}`);
+
+  const duration = await durationOf(input);
   log(`source ${duration.toFixed(3)}s`);
 
   let speech;
@@ -129,7 +134,7 @@ async function main() {
     speech = speechIntervalsFromWords(words);
     log(`word-level boundaries from ${words.length} words`);
   } else {
-    const sil = await detectSilence(CFG.input, duration);
+    const sil = await detectSilence(input, duration);
     speech = speechIntervals(sil, duration);
     log(`silencedetect: ${sil.length} silent gap(s), ${speech.length} speech region(s)`);
   }
@@ -157,7 +162,7 @@ async function main() {
     await run(FFMPEG, [
       '-y', '-v', 'error',
       '-ss', c.start.toFixed(3), '-t', durationSec.toFixed(3),
-      '-i', CFG.input,
+      '-i', input,
       '-vn', '-map', '0:a:0',
       '-ar', String(SR), '-ac', String(CH), '-c:a', 'libmp3lame', '-b:a', '192k',
       file,
@@ -170,6 +175,7 @@ async function main() {
 
   const plan = {
     source: CFG.input,
+    local: input === resolve(CFG.input) ? null : input,
     duration: r2(duration),
     settings: { chunkSeconds: CFG.chunkSeconds, silenceDb: CFG.silenceDb, minSilence: CFG.minSilence, mergeGap: CFG.mergeGap, minSpeech: CFG.minSpeech },
     summary: {
@@ -184,7 +190,11 @@ async function main() {
     segments,
   };
 
-  const planFile = join(CFG.outDir, `${stripExt(CFG.input)}.plan.json`);
+  // Name the plan after the original file, not after the download cache name.
+  const baseName = stripExt(/^https?:\/\//i.test(CFG.input)
+    ? decodeURIComponent(new URL(CFG.input).pathname.split('/').pop() || 'input')
+    : CFG.input);
+  const planFile = join(CFG.outDir, `${baseName}.plan.json`);
   await writeFile(planFile, JSON.stringify(plan, null, 2) + '\n', 'utf8');
 
   log(`segments ${segments.length} → speech ${toSend}, silence ${segments.length - toSend}`);
