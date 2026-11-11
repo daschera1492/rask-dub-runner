@@ -76,3 +76,6 @@ INPUT_URL="https://example.com/video.mp4" TARGET_LANG=Persian PARALLEL_CHUNKS=3 
 - ورک‌فلو: `.github/workflows/dub.yml` (Actions → Rask dub).
 - کش تکه‌ها در `work/state.json` است؛ اجرای دوباره فقط تکه‌های ناقص را می‌فرستد.
 - اینباکس emailnator عمومی است: فقط برای کد ورود یک‌بارمصرف.
+- برای تست سریع یک کلیپ کوتاه **با گفتار** بده (مثل `https://www.voiptroubleshooter.com/open_speech/american/OSR_us_000_0010_8k.wav`).
+  کلیپ بی‌گفتار یا چندثانیه‌ای موسیقی، پروژه را در Rask در `transcription_started` پارک می‌کند؛
+  نگهبان توقف (۸ دقیقه) اجرا را با پیام واضح قطع می‌کند.
