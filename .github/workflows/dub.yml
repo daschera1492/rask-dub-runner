@@ -84,9 +84,9 @@ on:
         default: '180'
         type: string
       allow_partial:
-        description: 'تکه‌های ناموفق را با سکوت پر کن و اجرا را شکست نده'
+        description: 'تکه‌های ناموفق را با سکوت پر کن و باز هم منتشر کن (خاموش = اگر یک تکه نیامد کل اجرا شکست بخورد)'
         required: false
-        default: false
+        default: true
         type: boolean
       output_name:
         description: 'نام فایل خروجی (خالی = نام ویدیو + کد زبان)'
@@ -201,6 +201,7 @@ jobs:
           INPUT_VIDEO: ${{ steps.dub.outputs.video_path }}
           INPUT_AUDIO: ${{ steps.dub.outputs.audio_path }}
           OUTPUT_NAME: ${{ steps.dub.outputs.name }}
+          MISSING_CHUNKS: ${{ steps.dub.outputs.missing }}
           AUDIO_OFFSET_MS: '0'
           RELEASE: '1'
           RELEASE_TAG: sync-${{ github.run_number }}
@@ -220,6 +221,10 @@ jobs:
             echo "- file: \`${{ steps.dub.outputs.video_path }}\`"
             echo "- duration: ${{ steps.dub.outputs.duration }}s"
             echo "- chunks: ${{ steps.dub.outputs.chunks }}"
+            echo "- complete: ${{ steps.dub.outputs.complete }}"
+            if [ -n "${{ steps.dub.outputs.missing }}" ]; then
+              echo "- silent chunks: \`${{ steps.dub.outputs.missing }}\`"
+            fi
             echo "- accounts: ${{ steps.dub.outputs.accounts }}"
             if [ -n "${{ steps.dub.outputs.video_path }}" ] && [ "${{ inputs.publish }}" = "true" ]; then
               echo "- release: https://github.com/${{ github.repository }}/releases/tag/sync-${{ github.run_number }}"

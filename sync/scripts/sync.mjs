@@ -270,18 +270,20 @@ async function main() {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-');
     const tag = CFG.releaseTag || `sync-${stamp}`;
     const notesFile = join(CFG.outDir, `${name}.notes.md`);
+    const missing = (env.MISSING_CHUNKS || '').trim();
     await writeFile(notesFile, [
       `**${name}**`,
       '',
       `- ویدیو: ${vInfo.width}×${vInfo.height} · ${vInfo.codec} · ${ms(vInfo.ms)}`,
       `- صدا: ${report.audio.mp3Ms} ms · drift ${report.audio.mp3DriftMs} ms`,
       `- offsets: ${CFG.offsetMs} ms`,
+      missing ? `- تکه‌های بدون دوبله: ${missing.replace(/,/g, ', ')} — این بازه‌ها در خروجی سکوت‌اند` : null,
       '',
       '`-c:v copy` — تصویر اصلی دست‌نخورده.',
       '',
       `> این ریلیز بعد از ۳۰ روز به‌صورت خودکار حذف می‌شود.`,
       '',
-    ].join('\n'), 'utf8');
+    ].filter((l) => l !== null).join('\n'), 'utf8');
     await publish(tag, CFG.releaseTitle || name, notesFile, [mp3, mp4, reportFile]);
   }
 

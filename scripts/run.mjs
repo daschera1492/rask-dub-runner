@@ -43,7 +43,11 @@ const OTP_WAIT_SECONDS = Math.max(30, Math.min(300, Number(env.OTP_WAIT_SECONDS 
 const MAX_ACCOUNTS = Math.max(1, Number(env.MAX_ACCOUNTS || 20));
 const CHUNK_TRIES = Math.max(1, Math.min(5, Number(env.CHUNK_TRIES || 3)));
 const MAX_CHUNKS = Math.max(0, Number(env.MAX_CHUNKS || 0)); // diagnostic runs
-const ALLOW_PARTIAL = ['1', 'true', 'yes'].includes(String(env.ALLOW_PARTIAL || '').toLowerCase());
+// A dub run can burn hours and still leave a few chunks without audio (Rask
+// parks projects, accounts run dry). Publishing with silence in those slots is
+// far more useful than throwing the whole run away, so partial is the default;
+// ALLOW_PARTIAL=0 restores the strict "all or nothing" behaviour.
+const ALLOW_PARTIAL = !['0', 'false', 'no'].includes(String(env.ALLOW_PARTIAL ?? '1').toLowerCase());
 const OUTPUT_NAME = (env.OUTPUT_NAME || '').trim();
 
 const STARTED = new Date();
@@ -272,10 +276,24 @@ async function main() {
   await Promise.all(Array.from({ length: Math.min(PARALLEL_CHUNKS, Math.max(1, pending.length)) }, worker));
 
   // Assemble: dubbed chunks in index order, missing ones silent (if allowed).
+  const missing = plan.filter((chunk) => {
+    const saved = state.chunks[chunk.index];
+    return !(saved?.file && fs.existsSync(saved.file));
+  });
+  if (missing.length) {
+    const list = missing.map((c) => c.index).join(', ');
+    log(`[assemble] ${missing.length} of ${plan.length} chunk(s) have no dub: ${list}`);
+    if (!ALLOW_PARTIAL) {
+      throw new Error(`chunk(s) ${list} have no dub (leave ALLOW_PARTIAL on to publish with silence there)`);
+    }
+    log('[assemble] keeping silence in those slots and publishing the rest');
+  } else {
+    log(`[assemble] all ${plan.length} chunk(s) dubbed`);
+  }
+
   const ordered = plan.map((chunk) => {
     const saved = state.chunks[chunk.index];
     if (saved?.file && fs.existsSync(saved.file)) return saved.file;
-    if (!ALLOW_PARTIAL) throw new Error(`chunk ${chunk.index} has no dub (set ALLOW_PARTIAL=1 to pad with silence)`);
     const blank = path.join(WORK_DIR, 'dub', `chunk-${String(chunk.index).padStart(3, '0')}-silence.mp3`);
     return blank;
   });
@@ -305,6 +323,15 @@ async function main() {
   setOutput('duration', finalDuration.toFixed(2));
   setOutput('accounts', String(accountsOpened));
   setOutput('chunks', String(plan.length));
+  setOutput('missing', missing.map((c) => c.index).join(','));
+  setOutput('complete', missing.length ? 'false' : 'true');
+
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+  const missingRows = missing.map((c) => {
+    const at = Number.isFinite(c.start) ? fmt(c.start) : '?';
+    const why = failures.get(c.index) ? ` — ${failures.get(c.index)}` : '';
+    return `| ${c.index} | ${at} | ${Number(c.duration || 0).toFixed(1)}s | ${why || 'no dub'} |`;
+  });
 
   summary([
     '## Rask dub finished',
@@ -314,11 +341,12 @@ async function main() {
     `| output | \`${outFile}\` |`,
     `| duration | ${finalDuration.toFixed(2)}s |`,
     `| target | ${TARGET} |`,
-    `| chunks | ${plan.length} |`,
+    `| chunks dubbed | ${plan.length - missing.length} / ${plan.length} |`,
+    `| chunks silent | ${missing.length} |`,
     `| accounts | ${accountsOpened} |`,
     `| proxy | ${proxy.enabled() ? 'on (oxylabs, sticky per account)' : 'off (runner IP)'} |`,
     `| size | ${sizeMb} MB |`,
-    failures.size ? `\nFailed chunks: ${[...failures.keys()].join(', ')}` : '',
+    missing.length ? `\n**silent in the output (no dub arrived):**\n\n| chunk | at | length | reason |\n| --- | --- | --- | --- |\n${missingRows.join('\n')}` : '',
   ].join('\n'));
 }
 
