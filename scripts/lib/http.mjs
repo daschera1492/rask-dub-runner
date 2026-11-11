@@ -129,7 +129,15 @@ function tunnelAgentClass(Base) {
             return;
           }
           const secure = tls.connect({ socket: raw, servername: this.targetHost, ALPNProtocols: ['http/1.1'] });
-          secure.once('secureConnect', () => done(null, secure));
+          // A stuck handshake must never wedge the whole run.
+          secure.setTimeout(this.timeoutMs, () => {
+            secure.destroy();
+            done(new Error(`proxy TLS handshake to ${this.targetHost} timed out`));
+          });
+          secure.once('secureConnect', () => {
+            secure.setTimeout(0);
+            done(null, secure);
+          });
           secure.once('error', (err) => done(err));
         })
         .catch((err) => done(err));
@@ -147,6 +155,22 @@ function proxiedRequest(url, { method, headers, body, timeoutMs, proxy }) {
     const isTls = target.protocol === 'https:';
     const mod = isTls ? https : http;
     const agent = new (isTls ? TunnelHttpsAgent : TunnelHttpAgent)(proxy, { isTls, host: target.hostname, timeoutMs });
+
+    // Hard ceiling: whatever the socket is doing (dial, CONNECT, handshake,
+    // stalled body) the call settles, so a bad exit IP can never hang a run.
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      req.destroy();
+      reject(new HttpError(`${method} ${url} failed: proxy timeout after ${timeoutMs}ms`, { url }));
+    }, timeoutMs + 5000);
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
 
     // Always announce the payload length: without it Node switches to
     // `transfer-encoding: chunked`, which some gateways reject.
@@ -170,8 +194,8 @@ function proxiedRequest(url, { method, headers, body, timeoutMs, proxy }) {
       (res) => {
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
-        res.on('error', reject);
-        res.on('end', () => resolve({
+        res.on('error', (err) => finish(reject, err));
+        res.on('end', () => finish(resolve, {
           status: res.statusCode || 0,
           headers: res.headers,
           text: Buffer.concat(chunks).toString('utf8'),
@@ -179,7 +203,7 @@ function proxiedRequest(url, { method, headers, body, timeoutMs, proxy }) {
       },
     );
 
-    req.on('error', (err) => reject(new HttpError(`${method} ${url} failed: ${err.message}`, { url })));
+    req.on('error', (err) => finish(reject, new HttpError(`${method} ${url} failed: ${err.message}`, { url })));
     if (body !== undefined) req.write(body);
     req.end();
   });
