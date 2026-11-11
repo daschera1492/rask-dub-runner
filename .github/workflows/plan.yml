@@ -35,6 +35,11 @@ on:
         required: false
         default: '0.35'
         type: string
+      join_gap:
+        description: 'مکث کوتاه‌تر از این (ثانیه) تکه را نمی‌شکند — هر پروژه یک دقیقه حساب می‌شود'
+        required: false
+        default: '2'
+        type: string
 
 permissions:
   contents: read
@@ -66,6 +71,7 @@ jobs:
           CHUNK_SECONDS: ${{ inputs.chunk_seconds }}
           SILENCE_DB: ${{ inputs.silence_db }}
           MIN_SILENCE: ${{ inputs.min_silence }}
+          JOIN_GAP: ${{ inputs.join_gap }}
           OUT_DIR: out
         run: node scripts/plan.mjs
 

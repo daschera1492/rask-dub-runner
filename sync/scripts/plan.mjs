@@ -28,6 +28,7 @@ const CFG = {
   silenceDb: Number(env.SILENCE_DB || -35),
   minSilence: Number(env.MIN_SILENCE || 0.35),
   mergeGap: Number(env.MERGE_GAP || 0.25),
+  joinGap: Number(env.JOIN_GAP || 2),
   minSpeech: Number(env.MIN_SPEECH || 0.15),
   outDir: resolve(env.OUT_DIR || 'out'),
   words: env.WHISPER_WORDS || '',
@@ -96,6 +97,32 @@ function splitInterval([start, end]) {
   return Array.from({ length: pieces }, (_, i) => [start + i * step, i === pieces - 1 ? end : start + (i + 1) * step]);
 }
 
+/**
+ * Pack neighbouring speech regions into chunks up to chunkSeconds long.
+ *
+ * Each dub project is billed as a whole minute whatever its real length, so a
+ * plan with a 2-second chunk per sentence burns one minute per sentence. Joining
+ * across short pauses keeps the rule intact — the chunk still contains speech,
+ * so it is still sent — while a real pause (>= joinGap) stays a silence slot that
+ * is never sent. Chunk edges therefore still land inside silence, never mid-word.
+ */
+function packSpeech(intervals) {
+  const out = [];
+  let cur = null;
+  for (const [s, e] of intervals) {
+    if (!cur) { cur = [s, e]; continue; }
+    const gap = s - cur[1];
+    if (gap <= CFG.joinGap && e - cur[0] <= CFG.chunkSeconds) {
+      cur[1] = e;
+      continue;
+    }
+    out.push(cur);
+    cur = [s, e];
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 /** Build the contiguous timeline: silence slots + speech chunks. */
 function buildTimeline(speech, duration) {
   const segs = [];
@@ -139,6 +166,10 @@ async function main() {
     log(`silencedetect: ${sil.length} silent gap(s), ${speech.length} speech region(s)`);
   }
 
+  const raw = speech.length;
+  speech = packSpeech(speech);
+  log(`packed ${raw} speech region(s) into ${speech.length} chunk(s) (join gap ${CFG.joinGap}s, max ${CFG.chunkSeconds}s)`);
+
   const timeline = buildTimeline(speech, duration);
   const chunksDir = join(CFG.outDir, 'chunks');
   await mkdir(chunksDir, { recursive: true });
@@ -177,11 +208,12 @@ async function main() {
     source: CFG.input,
     local: input === resolve(CFG.input) ? null : input,
     duration: r2(duration),
-    settings: { chunkSeconds: CFG.chunkSeconds, silenceDb: CFG.silenceDb, minSilence: CFG.minSilence, mergeGap: CFG.mergeGap, minSpeech: CFG.minSpeech },
+    settings: { chunkSeconds: CFG.chunkSeconds, silenceDb: CFG.silenceDb, minSilence: CFG.minSilence, mergeGap: CFG.mergeGap, joinGap: CFG.joinGap, minSpeech: CFG.minSpeech },
     summary: {
       segments: segments.length,
       speech: toSend,
       silence: segments.length - toSend,
+      speechRegions: raw,
       speechSeconds: r2(speechSeconds),
       silenceSeconds: r2(duration - speechSeconds),
       // every project is billed as one minute, whatever its real length
