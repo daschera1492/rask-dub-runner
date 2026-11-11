@@ -1,0 +1,112 @@
+# sync — چسباندن دقیق صدای دوبله روی تایملاین ویدیوی اصلی.
+#
+# این ورک‌فلو هیچ ربطی به دوبله ندارد: صدا را می‌گیرد، دقیقاً هم‌طول ویدیو می‌کند
+# (sample-accurate)، تصویر را با -c:v copy دست‌نخورده نگه می‌دارد و دو خروجی
+# جدا (mp3 و mp4) را در یک Release عمومی می‌گذارد. حذف ریلیزهای قدیمی با
+# workflow «cleanup» انجام می‌شود.
+#
+# جزئیات: sync/README.md
+
+name: sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'لینک مستقیم ویدیوی اصلی (mp4/mov/mkv)'
+        required: true
+        type: string
+      audio_url:
+        description: 'لینک مستقیم صدای دوبله‌شده (mp3/m4a/wav)'
+        required: false
+        type: string
+      segments_json:
+        description: 'اختیاری: [{start,end,file}] برای سینک تکه‌ای (دقیق‌ترین حالت)'
+        required: false
+        type: string
+      name:
+        description: 'نام خروجی — خالی = نام ویدیو + -synced'
+        required: false
+        default: ''
+        type: string
+      offset_ms:
+        description: 'جابه‌جایی کل صدا (ms) — مثبت = دیرتر'
+        required: false
+        default: '0'
+        type: string
+      publish:
+        description: 'ساخت Release با mp3 و mp4 جدا'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        working-directory: sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: ffmpeg
+        run: |
+          set -e
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo systemctl stop unattended-upgrades 2>/dev/null || true
+            sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 update -qq
+            sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+
+      - name: sync
+        env:
+          INPUT_VIDEO: ${{ inputs.video_url }}
+          INPUT_AUDIO: ${{ inputs.audio_url }}
+          SEGMENTS_JSON: ${{ inputs.segments_json }}
+          OUTPUT_NAME: ${{ inputs.name }}
+          AUDIO_OFFSET_MS: ${{ inputs.offset_ms }}
+          AUDIO_BITRATE: '192k'
+          RELEASE: ${{ inputs.publish }}
+          RELEASE_TITLE: ${{ inputs.name }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/sync.mjs
+
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo '### sync'
+            echo ''
+            for f in out/*.report.json; do
+              [ -f "$f" ] || continue
+              echo '```json'
+              cat "$f"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synced-${{ github.run_number }}
+          path: |
+            sync/out/*.mp3
+            sync/out/*.mp4
+            sync/out/*.report.json
+          retention-days: 7
+          if-no-files-found: warn

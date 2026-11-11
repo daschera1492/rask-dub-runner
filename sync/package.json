@@ -1,0 +1,15 @@
+{
+  "name": "dub-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fix a dubbed audio track to the exact timeline of the original video, export mp3 + mp4, publish as a GitHub Release, auto-delete after N days.",
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "selftest": "node scripts/selftest.mjs",
+    "cleanup": "node scripts/cleanup.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,6 @@
+node_modules/
+work/
+out/
+tools/
+*.log
+.DS_Store

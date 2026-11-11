@@ -1,0 +1,52 @@
+# cleanup — حذف ریلیزهای قدیمی (پیش‌فرض: ۳۰ روز).
+#
+# هر روز اجرا می‌شود و ریلیزهایی که از RETENTION_DAYS قدیمی‌ترند حذف می‌کند،
+# همراه با تگشان. تگ‌هایی که با "keep" شروع شوند دست‌نخورده می‌مانند.
+
+name: cleanup
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      retention_days:
+        description: 'مدت نگه‌داری (روز)'
+        required: false
+        default: '30'
+        type: string
+      dry_run:
+        description: 'فقط نمایش، بدون حذف'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cleanup
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: prune releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RETENTION_DAYS: ${{ inputs.retention_days || '30' }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          KEEP_LATEST: '0'
+        run: node scripts/cleanup.mjs

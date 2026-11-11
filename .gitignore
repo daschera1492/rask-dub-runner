@@ -2,3 +2,6 @@ work/
 work-*/
 node_modules/
 *.log
+sync/out/
+sync/tools/
+sync/work/
