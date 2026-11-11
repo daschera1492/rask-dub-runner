@@ -238,23 +238,34 @@ export function getProject(tokens, spaceId, projectId) {
 
 /**
  * Poll a project until the localized file exists.
+ *
+ * Rask occasionally parks a project in one status forever (seen with very
+ * short or speech-less uploads: `transcription_started` never advances). A
+ * stall watchdog fails fast instead of burning the whole timeout.
+ *
  * @returns {Promise<object>} the finished project record
  */
 export async function waitForProject(tokens, spaceId, projectId, {
   timeoutMs = 20 * 60_000,
   pollMs = 5000,
+  stallMs = 8 * 60_000,
   onTick = () => {},
 } = {}) {
   const deadline = Date.now() + timeoutMs;
   let last = '';
+  let changedAt = Date.now();
   while (Date.now() < deadline) {
     const project = await getProject(tokens, spaceId, projectId);
     if (project.status !== last) {
       last = project.status;
+      changedAt = Date.now();
       onTick(project);
     }
     if (project.error_message) throw new Error(`rask project failed: ${project.error_message}`);
     if (project.translated_video || project.translated_audio) return project;
+    if (Date.now() - changedAt > stallMs) {
+      throw new Error(`rask project ${projectId} stalled at "${last}" for ${Math.round(stallMs / 60000)}m`);
+    }
     await sleep(pollMs);
   }
   throw new Error(`rask project ${projectId} timed out at "${last}"`);
