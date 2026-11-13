@@ -202,8 +202,16 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState, deps = 
   const finishDub = async (chunk, name, { file, projectId, duration }, started) => {
     const raw = await api.extractAudioFromMp4(file, path.join(cfg.dubDir, `${name}-raw.mp3`));
     const fitted = path.join(cfg.dubDir, `${name}.mp3`);
-    const used = await api.fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
-    const out = fs.existsSync(fitted) ? fitted : used;
+    await api.fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
+    // `fitChunkAudio` may skip the re-encode when the timing already matches.
+    // The merge stage and the shard artifact only know `<name>.mp3`, and the
+    // `-raw.mp3` intermediate is excluded from the artifact, so make sure the
+    // normalised file always exists.
+    if (!fs.existsSync(fitted)) {
+      fs.mkdirSync(cfg.dubDir, { recursive: true });
+      fs.copyFileSync(raw, fitted);
+    }
+    const out = fitted;
 
     state.chunks[chunk.index] = {
       file: path.relative(workDir, out),

@@ -505,7 +505,14 @@ async function silencedetectCuts(input, duration, maxSeconds, hardCap) {
 export async function fitChunkAudio(input, outFile, seconds, { index = 0 } = {}) {
   const have = await probeDuration(input);
   const diff = have - seconds;
-  if (Math.abs(diff) <= 0.05) return input;
+  if (Math.abs(diff) <= 0.05) {
+    // The dub already matches its span. It still has to be materialised as
+    // `outFile`: the raw file is an intermediate that the CI artifact excludes,
+    // so returning `input` used to drop the chunk from the shard upload even
+    // though Rask had dubbed it successfully.
+    fs.copyFileSync(input, outFile);
+    return outFile;
+  }
 
   const filters = [];
   if (diff > 0) {

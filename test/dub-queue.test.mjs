@@ -125,10 +125,10 @@ function makeFakeRask() {
       return out;
     },
 
-    fitChunkAudio: async (_raw, out) => {
-      fs.writeFileSync(out, 'fitted');
-      return out;
-    },
+    // Mimics the real media helper when the dub already matches its span: it
+    // returns the raw file without writing `out`. The queue still has to leave
+    // a normalised <name>.mp3 behind, because that is all the artifact keeps.
+    fitChunkAudio: async (raw) => raw,
   };
 
   return { deps, state };
@@ -175,6 +175,10 @@ check('a stalled project retires its account at once', fake.stalledAccounts.leng
 check('the poisoned account dubbed nothing',
   ![...fake.chunkAccounts.values()].includes('acc1@gmail.com'));
 check('every success was persisted', Object.keys(state.chunks).length === 6, `${saves.length} saves`);
+check('a no-op fit still leaves <name>.mp3 for the artifact',
+  Object.entries(state.chunks).every(([index, chunk]) => chunk.file.endsWith(`${dubLib.chunkName(Number(index))}.mp3`)
+    && fs.existsSync(path.join(work, chunk.file))),
+  JSON.stringify(Object.values(state.chunks).map((chunk) => chunk.file)));
 check('the state file on disk parses and holds all 6 chunks',
   JSON.parse(fs.readFileSync(stateFile, 'utf8')).chunks
   && Object.keys(JSON.parse(fs.readFileSync(stateFile, 'utf8')).chunks).length === 6);
