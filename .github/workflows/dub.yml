@@ -183,14 +183,17 @@ jobs:
   prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
-    env:
-      WORK_DIR: ${{ runner.temp }}/work
     outputs:
       shards: ${{ steps.prepare.outputs.shards }}
       chunks: ${{ steps.prepare.outputs.chunks }}
       duration: ${{ steps.prepare.outputs.duration }}
     steps:
       - uses: actions/checkout@v4
+
+      # `runner` is not available in a job-level `env` block, so the work
+      # directory is exported for the rest of the job here.
+      - name: Work directory
+        run: echo "WORK_DIR=$RUNNER_TEMP/work" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -245,10 +248,13 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
     env:
-      WORK_DIR: ${{ runner.temp }}/work
       SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v4
+
+      # `runner` is not available in a job-level `env` block.
+      - name: Work directory
+        run: echo "WORK_DIR=$RUNNER_TEMP/work" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -286,10 +292,12 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      WORK_DIR: ${{ runner.temp }}/work
     steps:
       - uses: actions/checkout@v4
+
+      # `runner` is not available in a job-level `env` block.
+      - name: Work directory
+        run: echo "WORK_DIR=$RUNNER_TEMP/work" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
