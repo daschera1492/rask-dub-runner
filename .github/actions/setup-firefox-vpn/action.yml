@@ -1,0 +1,26 @@
+name: Setup Firefox VPN
+description: Start the Firefox (Mozilla) VPN egress that replaces the YouTube cookie jar. No-op unless PROXY_ENABLED resolves to firefox.
+
+# `awmvpn-core` is started here, on loopback, and exported through GITHUB_ENV:
+#
+#   FXA_HTTP_PROXY=http://user:pass@127.0.0.1:10810
+#   FXA_EXIT_IP=<the IP the rest of the job leaves from>
+#
+# `scripts/lib/proxy.mjs` reads FXA_HTTP_PROXY and hands it to both the Rask
+# account calls and yt-dlp (`--proxy`), so no cookie ever reaches YouTube.
+
+runs:
+  using: composite
+  steps:
+    - name: Start Firefox VPN
+      shell: bash
+      run: node scripts/firefox-vpn.mjs start
+
+    - name: Show egress
+      shell: bash
+      run: |
+        if [ -n "${FXA_HTTP_PROXY:-}" ]; then
+          echo "Firefox VPN up — exit ${FXA_EXIT_IP:-unknown} (country ${FXA_COUNTRY_USED:-auto})"
+        else
+          echo "Firefox VPN not started for this run (PROXY_ENABLED is not firefox)"
+        fi

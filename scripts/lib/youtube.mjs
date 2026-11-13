@@ -7,16 +7,16 @@
  * WORK_DIR under a stable `youtube-<id>.<ext>` name, so prepare and merge land
  * on the same path and a re-run reuses it instead of downloading again.
  *
- * This is the only place in the repo that may need a signed-in session: cloud
- * runner IPs get "Sign in to confirm you're not a bot" and age-gated videos
- * answer 403, so `YT_COOKIES` (a Netscape jar) or `YT_COOKIES_FILE` is handed
- * to yt-dlp with `--cookies`. The jar is written 0600 into the temp dir and is
- * never logged.
+ * No YouTube cookies are used, ever. Cloud runner IPs get "Sign in to confirm
+ * you're not a bot", and a cookie jar is a credential that stops working the
+ * moment the request leaves from another IP (which is exactly what happens
+ * when prepare and merge run on different runners). The fix is an egress, not
+ * a login: yt-dlp is handed the proxy selected by `PROXY_ENABLED`
+ * (Firefox VPN or Oxylabs) with `--proxy`.
  */
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 const YT_HOST = /(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com)$/i;
@@ -47,46 +47,6 @@ export function videoId(input) {
   } catch {
     return 'unknown';
   }
-}
-
-/**
- * Netscape jar text for a `name=value; name=value` header, so a cookie string
- * copied out of the browser's devtools works as well as an exported jar.
- */
-export function netscapeFromHeader(header) {
-  const lines = ['# Netscape HTTP Cookie File'];
-  for (const pair of String(header).split(';')) {
-    const [name, ...rest] = pair.trim().split('=');
-    const value = rest.join('=');
-    if (!name || !value) continue;
-    lines.push(['.youtube.com', 'TRUE', '/', 'TRUE', '0', name, value].join('\t'));
-  }
-  return lines.join('\n');
-}
-
-/**
- * Path to the cookie jar for yt-dlp, or null when no cookies are configured.
- * A pasted jar is returned as-is (already a file); a raw blob is written 0600
- * into the temp dir; a `name=value;` header is converted to Netscape first.
- */
-export function cookieJar({ ytCookies = '', ytCookiesFile = '' } = {}) {
-  if (ytCookiesFile) {
-    if (!fs.existsSync(ytCookiesFile)) {
-      throw new Error(`YT_COOKIES_FILE not found: ${ytCookiesFile}`);
-    }
-    return ytCookiesFile;
-  }
-
-  const raw = String(ytCookies || '').trim();
-  if (!raw) return null;
-
-  const text = raw.includes('\t') || /^#\s*(Netscape|HttpOnly_)/m.test(raw)
-    ? raw
-    : netscapeFromHeader(raw);
-
-  const file = path.join(os.tmpdir(), `rask-yt-cookies-${process.pid}.txt`);
-  fs.writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`, { mode: 0o600 });
-  return file;
 }
 
 /** The already-downloaded file for this id, if any (prepare/merge reuse it). */
@@ -129,7 +89,20 @@ export function cleanPartials(workDir, id) {
   return removed;
 }
 
-/** yt-dlp argv. Kept pure so the offline test can assert on it. */export function ytdlpArgs({ url, template, cookies = null, format = 'bv*+ba/b', extra = '', jsRuntime = '' }) {
+/**
+ * yt-dlp argv. Kept pure so the offline test can assert on it.
+ *
+ * `proxy` is a URL from proxy.mjs (http or socks5h). It is never a cookie jar:
+ * YouTube sees a different exit, not a signed-in session.
+ */
+export function ytdlpArgs({
+  url,
+  template,
+  format = 'bv*+ba/b',
+  extra = '',
+  jsRuntime = '',
+  proxy = null,
+}) {
   const args = [
     // A watch url copied from a playlist carries `&list=`; without this,
     // yt-dlp happily downloads all 300 videos.
@@ -143,7 +116,7 @@ export function cleanPartials(workDir, id) {
     '--merge-output-format', 'mp4',
     '-o', template,
   ];
-  if (cookies) args.push('--cookies', cookies);
+  if (proxy) args.push('--proxy', proxy);
   if (jsRuntime) args.push('--js-runtimes', jsRuntime);
   if (extra) args.push(...String(extra).split(/\s+/).filter(Boolean));
   args.push(url);
@@ -180,13 +153,24 @@ async function jsRuntime(bin) {
   return runtimeCache;
 }
 
+/** One-line egress description for the log, without credentials. */
+function egressLabel(proxy) {
+  if (!proxy) return 'direct (runner IP)';
+  try {
+    const u = new URL(proxy);
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+  } catch {
+    return 'configured proxy';
+  }
+}
+
 /**
  * Download a YouTube url into `workDir` and return the local file path.
  * @returns {Promise<string>}
  */
 export async function downloadYoutube(input, {
   workDir,
-  cookies = null,
+  proxy = null,
   ytdlp = 'yt-dlp',
   format = 'bv*+ba/b',
   extra = '',
@@ -202,14 +186,14 @@ export async function downloadYoutube(input, {
     return cached;
   }
 
-  log(`[input] youtube ${id} -> yt-dlp (cookies: ${cookies ? 'yes' : 'none'})`);
+  log(`[input] youtube ${id} -> yt-dlp via ${egressLabel(proxy)}`);
   const template = path.join(workDir, `youtube-${id}.%(ext)s`);
   const args = ytdlpArgs({
     url: input,
     template,
-    cookies,
     format,
     extra,
+    proxy,
     jsRuntime: await jsRuntime(ytdlp),
   });
 
@@ -233,10 +217,9 @@ export async function downloadYoutube(input, {
   }
 
   if (code !== 0) {
-    const hint = cookies
-      ? ' — cookies were sent, but YouTube rejects the same session from another IP; that is why the ' +
-        'workflow hands the prepare download to merge as an artifact instead of downloading twice'
-      : ' — no cookies configured: YouTube blocks most cloud runner IPs without a signed-in session, set YT_COOKIES';
+    const hint = proxy
+      ? ` — the request left through ${egressLabel(proxy)}; if YouTube still says "Sign in to confirm", that exit is flagged: switch proxy_enabled (firefox/oxylabs) or pick another PROXY_COUNTRIES value`
+      : ' — no egress is configured, and YouTube blocks most cloud runner IPs: set proxy_enabled=firefox (Firefox VPN) or oxylabs, which is what replaced the old cookie jar';
     throw new Error(`yt-dlp failed (exit ${code}) for ${input}${hint}`);
   }
 

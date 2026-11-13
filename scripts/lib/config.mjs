@@ -92,10 +92,10 @@ export const cfg = {
   outputName: (env.OUTPUT_NAME || '').trim(),
 
   // Source download. Plain http(s) links still go through curl; a YouTube link
-  // is resolved by yt-dlp, which needs a cookie jar for most cloud IPs.
+  // is resolved by yt-dlp through the egress selected by PROXY_ENABLED
+  // (Firefox VPN or Oxylabs). There is deliberately no cookie path: see
+  // proxy.mjs and youtube.mjs.
   ytdlp: (env.YTDLP || 'yt-dlp').trim(),
-  ytCookies: env.YT_COOKIES || '',
-  ytCookiesFile: (env.YT_COOKIES_FILE || '').trim(),
   ytFormat: (env.YT_FORMAT || 'bv*+ba/b').trim(),
   ytdlpArgs: (env.YTDLP_ARGS || '').trim(),
 

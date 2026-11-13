@@ -18,7 +18,7 @@ import { loadPlan, savePlan, assignShards } from './plan.mjs';
 import { dubQueue, chunkName, planFile, dubbedFile } from './dub.mjs';
 import { log, warn, setOutput, summary, formatSeconds } from './report.mjs';
 import * as media from './media.mjs';
-import { isYouTube, downloadYoutube, cookieJar } from './youtube.mjs';
+import { isYouTube, downloadYoutube } from './youtube.mjs';
 
 export { loadPlan };
 
@@ -37,9 +37,12 @@ export async function resolveInput(cfg) {
   if (!/^https?:\/\//i.test(cfg.input)) throw new Error(`input not found: ${cfg.input}`);
 
   if (isYouTube(cfg.input)) {
+    // No cookie jar: the selected egress is what makes YouTube answer. With
+    // proxy_enabled=firefox the download leaves through the Mozilla VPN, with
+    // oxylabs through the residential pool, and with none through the runner.
     return downloadYoutube(cfg.input, {
       workDir: cfg.workDir,
-      cookies: cookieJar(cfg),
+      proxy: proxy.youtubeProxy(),
       ytdlp: cfg.ytdlp,
       format: cfg.ytFormat,
       extra: cfg.ytdlpArgs,
@@ -175,6 +178,10 @@ export async function prepare(cfg) {
 /* ------------------------------------------------------------------ */
 
 export async function dubPlan(cfg, plan, { shard = cfg.shard } = {}) {
+  // A shard must have the same egress the account pool will use; failing here
+  // is better than opening an account on a provider that cannot work.
+  proxy.assertConfigured();
+
   const assignment = shard === null
     ? null
     : plan.assign?.find((entry) => entry.shard === shard);
@@ -423,7 +430,7 @@ export async function merge(cfg, plan) {
     `| kept original audio | ${stats.original} |`,
     `| silence (ON_FAIL) | ${stats.silent} |`,
     `| accounts | ${accounts} |`,
-    `| proxy | ${proxy.enabled() ? 'on (oxylabs, sticky per account)' : 'off (runner IP)'} |`,
+    `| proxy | ${proxy.enabled() ? proxy.status() : 'off (runner IP)'} |`,
     ...(outReport.missing.length
       ? ['', `> Failed chunks kept in the source language: ${outReport.missing.join(', ')}`]
       : []),

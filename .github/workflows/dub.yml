@@ -143,10 +143,15 @@ on:
         default: ''
         type: string
       proxy_enabled:
-        description: 'پروکسی Oxylabs — true = هر اکانت با IP residential جدا'
+        description: 'خروجی اینترنت — none = بدون پروکسی، oxylabs = IP جدا برای هر اکانت، firefox = VPN فایرفاکس (جای کوکی یوتیوب)'
         required: true
-        default: true
-        type: boolean
+        default: 'auto'
+        type: choice
+        options:
+          - 'auto'
+          - 'oxylabs'
+          - 'firefox'
+          - 'none'
       proxy_countries:
         description: 'کشور پروکسی (کد دو حرفی، با کاما) — auto = us,de,nl,gb'
         required: false
@@ -175,12 +180,20 @@ env:
   # emailnator: 3 = ".Gmail" dot alias only
   EMAILNATOR_IDS: '3'
   EMAILNATOR_POLL_SECONDS: '4'
-  # Cloud runner IPs are throttled by emailnator; ride the account's proxy.
-  EMAILNATOR_PROXY: ${{ inputs.proxy_enabled && '1' || '0' }}
-  # Oxylabs residential proxy: one sticky exit IP per account.
+  # Cloud runner IPs are throttled by emailnator; ride the selected egress.
+  EMAILNATOR_PROXY: ${{ inputs.proxy_enabled != 'none' && '1' || '0' }}
+  # Egress: none | oxylabs | firefox | auto (see scripts/lib/proxy.mjs).
+  # Oxylabs residential: one sticky exit IP per account.
   PROXY_OXYLABS: ${{ secrets.PROXY_OXYLABS }}
   PROXY_ENABLED: ${{ inputs.proxy_enabled }}
   PROXY_COUNTRIES: ${{ inputs.proxy_countries == 'auto' && 'us,de,nl,gb' || inputs.proxy_countries }}
+  # Firefox (Mozilla) VPN — the replacement for the YouTube cookie jar.
+  # Same variable names the reference workflow uses.
+  FXA_ACCOUNTS_TGZ_B64: ${{ secrets.FXA_ACCOUNTS_TGZ_B64 }}
+  FOXY_ACCOUNTS_TGZ_B64: ${{ secrets.FOXY_ACCOUNTS_TGZ_B64 }}
+  FOXY_REFRESH_TOKEN: ${{ secrets.FOXY_REFRESH_TOKEN }}
+  # Country comes from PROXY_COUNTRIES; FXA_COUNTRY is only for a local run.
+  FXA_TRANSPORT: h2
 
 jobs:
   # ------------------------------------------------------------------ #
@@ -193,10 +206,6 @@ jobs:
       shards: ${{ steps.prepare.outputs.shards }}
       chunks: ${{ steps.prepare.outputs.chunks }}
       duration: ${{ steps.prepare.outputs.duration }}
-    env:
-      # Only this stage and merge download the source; a YouTube link goes
-      # through yt-dlp, which needs a signed-in session from a cloud IP.
-      YT_COOKIES: ${{ secrets.YT_COOKIES }}
     steps:
       - uses: actions/checkout@v4
 
@@ -212,8 +221,12 @@ jobs:
       - uses: ./.github/actions/setup-ffmpeg
       - uses: ./.github/actions/setup-ytdlp
 
+      # The YouTube egress. No-op unless PROXY_ENABLED resolves to firefox.
+      # yt-dlp gets this proxy with --proxy, so a watch page never needs cookies.
+      - uses: ./.github/actions/setup-firefox-vpn
+
       # Pure node, no network, no ffmpeg: catches a broken account pool and a
-      # broken yt-dlp/cookie path before any addresses or minutes are spent.
+      # broken yt-dlp/proxy path before any addresses or minutes are spent.
       - name: Test account pool, publish guard and YouTube source
         run: npm test
 
@@ -248,11 +261,10 @@ jobs:
           retention-days: 7
 
       # Hand the video itself to merge. A second yt-dlp call from another runner
-      # IP hits YouTube's "Sign in to confirm you're not a bot" even with the
-      # same cookies, which used to fail the run AFTER every chunk was dubbed
-      # and paid for. `youtube-*` only matches a yt-dlp download, so a direct
-      # link or a local file is never uploaded here, and compression is off
-      # because the video is already compressed.
+      # has to make the trip through the VPN again, which is paid bandwidth and
+      # one more chance for YouTube to refuse. `youtube-*` only matches a yt-dlp
+      # download, so a direct link or a local file is never uploaded here, and
+      # compression is off because the video is already compressed.
       - name: Upload YouTube source
         uses: actions/upload-artifact@v4
         with:
@@ -261,6 +273,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
           compression-level: 0
+
+      - name: Stop Firefox VPN
+        if: always()
+        run: node scripts/firefox-vpn.mjs stop
 
   # ------------------------------------------------------------------ #
   # 2. Dub — one job per shard, all at the same time                    #
@@ -288,6 +304,10 @@ jobs:
 
       - uses: ./.github/actions/setup-ffmpeg
 
+      # Rask accounts leave through the selected egress; with firefox that is
+      # the local VPN core.
+      - uses: ./.github/actions/setup-firefox-vpn
+
       - name: Download plan
         uses: actions/download-artifact@v4
         with:
@@ -310,6 +330,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Stop Firefox VPN
+        if: always()
+        run: node scripts/firefox-vpn.mjs stop
+
   # ------------------------------------------------------------------ #
   # 3. Merge + publish                                                  #
   # ------------------------------------------------------------------ #
@@ -318,10 +342,6 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      # Merge re-resolves the source to mux onto it, so a YouTube link has to
-      # be downloaded here too (the plan's path belongs to the prepare runner).
-      YT_COOKIES: ${{ secrets.YT_COOKIES }}
     steps:
       - uses: actions/checkout@v4
 
@@ -335,6 +355,10 @@ jobs:
 
       - uses: ./.github/actions/setup-ffmpeg
       - uses: ./.github/actions/setup-ytdlp
+
+      # Only needed when the `rask-source` artifact is missing (a direct link
+      # never uploads one and never calls yt-dlp here).
+      - uses: ./.github/actions/setup-firefox-vpn
 
       - name: Download plan + chunks
         continue-on-error: true
@@ -422,3 +446,7 @@ jobs:
             echo "- accounts: ${{ steps.merge.outputs.accounts }}"
             echo "- still missing: \`${{ steps.merge.outputs.missing }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop Firefox VPN
+        if: always()
+        run: node scripts/firefox-vpn.mjs stop

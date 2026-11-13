@@ -2,7 +2,8 @@
  * Offline test for the YouTube source (`scripts/lib/youtube.mjs`).
  *
  * No yt-dlp binary, no network: only the pure helpers (url detection, id,
- * cookie jar, argv) plus the failure path when yt-dlp is missing.
+ * argv) plus the failure path when yt-dlp is missing. Cookies are gone on
+ * purpose — the egress is a proxy, and `test/proxy.test.mjs` covers it.
  *
  *   node test/youtube.test.mjs
  */
@@ -60,34 +61,10 @@ check('id from embed', yt.videoId('https://www.youtube-nocookie.com/embed/dQw4w9
 check('id survives a playlist param', yt.videoId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1') === 'dQw4w9WgXcQ');
 
 /* ------------------------------------------------------------------ */
-/* Cookie jar                                                          */
+/* No cookie path at all                                               */
 /* ------------------------------------------------------------------ */
 
-check('no cookies -> null', yt.cookieJar({}) === null);
-
-const header = 'SID=abc123; HSID=def456; SAPISID=ghi/789';
-const fromHeader = yt.cookieJar({ ytCookies: header });
-const headerText = fs.readFileSync(fromHeader, 'utf8');
-check('header form is converted to a jar', headerText.startsWith('# Netscape HTTP Cookie File'));
-check('header form keeps every cookie', headerText.split('\n').filter(Boolean).length === 4);
-check('header form names the domain', headerText.includes('.youtube.com\tTRUE\t/'));
-check('header form splits on the first =', headerText.includes('\tSAPISID\tghi/789'));
-
-const jar = '# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSID\tzzz\n';
-const fromJar = yt.cookieJar({ ytCookies: jar });
-check('an exported jar is passed through untouched', fs.readFileSync(fromJar, 'utf8') === jar);
-
-const jarFile = path.join(tmp, 'cookies.txt');
-fs.writeFileSync(jarFile, jar);
-check('YT_COOKIES_FILE is used as-is', yt.cookieJar({ ytCookiesFile: jarFile }) === jarFile);
-
-let missingFile = null;
-try {
-  yt.cookieJar({ ytCookiesFile: path.join(tmp, 'nope.txt') });
-} catch (err) {
-  missingFile = err;
-}
-check('a missing YT_COOKIES_FILE fails loudly', Boolean(missingFile), String(missingFile?.message));
+check('no cookie helper is exported', yt.cookieJar === undefined);
 
 /* ------------------------------------------------------------------ */
 /* argv                                                                */
@@ -96,15 +73,22 @@ check('a missing YT_COOKIES_FILE fails loudly', Boolean(missingFile), String(mis
 const template = path.join(tmp, 'youtube-abc.%(ext)s');
 const bare = yt.ytdlpArgs({ url: 'https://youtu.be/abc', template });
 check('--no-playlist is always on', bare.includes('--no-playlist'));
-check('no --cookies without a jar', !bare.includes('--cookies'));
+check('no --cookies ever', !bare.includes('--cookies'));
+check('no --proxy when egress is off', !bare.includes('--proxy'));
 check('url is last', bare[bare.length - 1] === 'https://youtu.be/abc');
 check('output template is set', bare[bare.indexOf('-o') + 1] === template);
 check('merge output is mp4', bare[bare.indexOf('--merge-output-format') + 1] === 'mp4');
 
-const withCookies = yt.ytdlpArgs({ url: 'https://youtu.be/abc', template, cookies: jarFile, extra: '--limit-rate 5M' });
-check('--cookies is added when a jar exists', withCookies[withCookies.indexOf('--cookies') + 1] === jarFile);
-check('extra args are split in', withCookies.includes('--limit-rate') && withCookies.includes('5M'));
-check('extra args stay before the url', withCookies[withCookies.length - 1] === 'https://youtu.be/abc');
+const egress = 'http://user:pass@127.0.0.1:10810';
+const withProxy = yt.ytdlpArgs({
+  url: 'https://youtu.be/abc',
+  template,
+  proxy: egress,
+  extra: '--limit-rate 5M',
+});
+check('--proxy carries the selected egress', withProxy[withProxy.indexOf('--proxy') + 1] === egress);
+check('extra args are split in', withProxy.includes('--limit-rate') && withProxy.includes('5M'));
+check('extra args stay before the url', withProxy[withProxy.length - 1] === 'https://youtu.be/abc');
 
 const withRuntime = yt.ytdlpArgs({ url: 'https://youtu.be/abc', template, jsRuntime: 'node' });
 check('--js-runtimes is only passed when supported', withRuntime.includes('node'));
