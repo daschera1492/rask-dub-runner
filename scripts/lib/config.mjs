@@ -35,21 +35,31 @@ const shardRaw = env.SHARD === undefined ? '' : String(env.SHARD).trim();
  * with the create call. The wording below is deliberately blunt: models drift
  * back to written Persian ("باید کلیک کنید") unless the colloquial register and
  * the second-person singular are spelled out with examples.
+ *
+ * Written entirely in Persian on purpose (a half-Persian/half-English prompt
+ * diluted the Persian-specific rules). Diacritics are now BOUNDED: the old
+ * "write every word fully vocalized" rule made the model emit confident but
+ * wrong kasra/fatha, and a wrong vowel is worse for TTS than no vowel at all.
+ * Pauses are handled by punctuation and short clauses, which is the only thing
+ * the translation stage can actually control.
  */
 export const DEFAULT_TRANSLATION_PROMPT = [
-  'Translate in a fully spoken, colloquial, friendly tone — one friend talking to another.',
-  'It must never read like written, formal or bookish text.',
-  'Use second-person singular and everyday contractions instead of formal address.',
-  'اگر زبان مقصد فارسی است، این قواعد اجباری است: کاملاً گفتاری و خودی بنویس؛',
-  '«باید اینجا کلیک کنی» درست است و «باید اینجا کلیک کنید» غلط؛',
-  'از «تو، میتونی، میدونی، میخوای، ببین، خب، راستش، بابا، داداش، یه، واسه، بذار، دیگه، یعنی» استفاده کن؛',
-  '«می‌باشد» → «هست»، «آن را» → «اونو»، «شما» → «تو»، «گردید» → «شد»، «خواهم» → «می‌خوام».',
-  'همهٔ کلمه‌های فارسی را با اعراب کامل بنویس، مثل «سَلام، حالِت چِطوره؟ میدونی چیه؟»',
-  '(اعراب را روی حرف‌های لازم بگذار تا تلفظ دقیق شود)؛',
-  'هر واژهٔ لاتین یا اصطلاح فنی را هم با حروف فارسی و با اعراب بنویس',
-  '(code → «کُد»، API → «اِی‌پی‌آی»، online → «آنلاین») و هیچ حرف لاتینی در ترجمه نگذار.',
-  'Keep the meaning exact, add or drop nothing, and keep sentences short and natural so they fit the voice timing.',
-].join(' ');
+  'تو مترجم حرفه‌ای دوبله هستی. متن را به فارسی محاوره‌ای و طبیعی ترجمه کن؛',
+  'لحن دوستانه و روزمره، مثل حرف زدن یک آدم واقعی — نه کتابی، نه خبری، نه رسمی.',
+  'فقط متن ترجمه را بده؛ مقدمه، توضیح و گلچین ننویس. معنا را مو‌به‌مو حفظ کن، چیزی اضافه یا حذف نکن.',
+  'دوم‌شخص مفرد: «تو». «شما / می‌باشد / می‌گردد / خواهم / آن را» ممنوع.',
+  'هر جمله حداکثر ۱۰ کلمه و یک‌نفسی باشد؛ جمله‌های بلند را بشکن.',
+  'مکث را فقط با نشانه‌گذاری بساز و هرگز حذفش نکن:',
+  '«،» مکث کوتاه، «؛» مکث متوسط، «.» مکث کامل، «…» مکث کشیده یا تردید.',
+  'جمله‌ها را به هم نچسبان و علائم را قربانی کوتاه‌کردن نکن.',
+  'اعداد و درصد و ساعت را با حروف بنویس: ۳ ← «سه»، ۲۵٪ ← «بیست‌وپنج درصد»، ۱۰:۳۰ ← «ده و نیم».',
+  'هیچ حرف لاتینی نگذار. اصطلاح فنی و نام را با حروف فارسی و آوانگاری طبیعی بنویس:',
+  'code ← «کد»، API ← «اِی‌پی‌آی»، online ← «آنلاین»، video ← «ویدیو».',
+  'اعراب را فقط جایی بگذار که بدون آن خواندن کلمه اشتباه می‌شود',
+  '(کِرم/کَرَم، مُلک/مِلک/مَلَک، سَبک/سبُک). هرگز همهٔ کلمه‌ها را اعراب‌گذاری نکن؛ اعراب غلط بدتر از بی‌اعراب است.',
+  'کلمه را همان‌طور که تلفظ می‌شود بنویس: «می‌روم» ← «میرم»، «برای» ← «واسه»، «آن را» ← «اون رو».',
+  'اگر جا کم آمد کلمهٔ کوتاه‌تر انتخاب کن؛ ترتیب جمله را به‌هم نزن و معنا را قربانی نکن.',
+].join('\n');
 
 const promptRaw = String(env.TRANSLATION_PROMPT ?? '').trim();
 const promptOff = ['off', 'none', '0', 'false', 'no'].includes(promptRaw.toLowerCase());
