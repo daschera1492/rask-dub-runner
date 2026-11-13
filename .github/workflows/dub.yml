@@ -198,6 +198,11 @@ jobs:
 
       - uses: ./.github/actions/setup-ffmpeg
 
+      # Pure node, no network, no ffmpeg: catches a broken account pool before
+      # any addresses or minutes are spent.
+      - name: Test account pool
+        run: node test/dub-queue.test.mjs
+
       # Better chunk boundaries (cuts in pauses instead of mid-sentence).
       # Optional: the runner falls back to ffmpeg silencedetect when absent.
       - name: Cache Whisper model

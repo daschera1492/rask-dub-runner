@@ -46,9 +46,27 @@ export function dubbedFile(workDir, index) {
  * @param {string}   options.workDir
  * @param {object}   options.state     { chunks: { [index]: {...} } }
  * @param {Function} options.saveState
+ * @param {object}   [options.deps]    overrides for tests (fake Rask/emailnator)
  * @returns {Promise<{accountsOpened:number, attempts:number, failures:Array<[number,string]>}>}
  */
-export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
+export async function dubQueue({ chunks, cfg, workDir, state, saveState, deps = {} }) {
+  // Every network and media call goes through this table, so a test can drive
+  // the queue (stalls, exhausted minutes, hard failures) without Rask.
+  const api = {
+    startAccount: rask.startAccount,
+    remaining: rask.remaining,
+    getCredits: rask.getCredits,
+    dubAudio: rask.dubAudio,
+    generateAddress: emailnator.generateAddress,
+    waitForCode: emailnator.waitForCode,
+    forIdentity: proxy.forIdentity,
+    withProxy,
+    sleep,
+    extractAudioFromMp4,
+    fitChunkAudio,
+    ...deps,
+  };
+
   const byIndex = new Map(chunks.map((chunk) => [chunk.index, chunk]));
   const cap = cfg.maxAccounts > 0 ? cfg.maxAccounts : Math.ceil(chunks.length / 3) + 4;
 
@@ -56,18 +74,33 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
   let accountsOpened = 0;
   let attempts = 0;
   let serverLeft = { minutes: 0, videos: 0 };
-  let inFlight = 0;
+  // Reservations are counted per account object, so a rollover can never mix
+  // the old account's in-flight projects into the new account's budget.
+  const reserved = new Map();
+  // Remaining projects for an account, decremented the moment a slot is taken.
+  // The server snapshot lags (it only changes after a project finishes), so on
+  // a burst of completions the estimate alone would sell the same minute twice
+  // and create a project the account cannot pay for.
+  const budget = new Map();
   const failures = new Map();
 
-  /** Free project slots on the current account, minus the ones already running. */
-  const slots = () => Math.min(serverLeft.minutes, serverLeft.videos) - inFlight;
+  const inFlight = (acc = account) => (acc ? reserved.get(acc) || 0 : 0);
+
+  /**
+   * Free project slots on the current account: the server's numbers, capped by
+   * what this worker has already promised away.
+   */
+  const slots = () => Math.min(
+    serverLeft.minutes,
+    serverLeft.videos,
+    account ? budget.get(account) || 0 : 0,
+  );
 
   const retire = (why) => {
     if (!account) return;
     log(`[account] retiring ${account.email}: ${why}`);
     account = null;
     serverLeft = { minutes: 0, videos: 0 };
-    inFlight = 0;
   };
 
   const openAccount = async () => {
@@ -77,16 +110,17 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
     accountsOpened += 1;
     // One sticky residential exit for this account's whole life: signup, every
     // API call, and the code polling. Media stays direct.
-    const exit = proxy.forIdentity(crypto.randomUUID());
+    const exit = api.forIdentity(crypto.randomUUID());
     log(`[account] opening #${accountsOpened}${exit ? ` via ${exit.label}` : ' (direct IP)'}`);
-    const acc = await withProxy(exit, () => rask.startAccount({
-      emailnator,
+    const acc = await api.withProxy(exit, () => api.startAccount({
+      emailnator: { generateAddress: api.generateAddress, waitForCode: api.waitForCode },
       otpWaitSeconds: cfg.otpWait,
     }));
     acc.proxy = exit;
     account = acc;
-    serverLeft = rask.remaining(acc.credits);
-    inFlight = 0;
+    reserved.set(acc, 0);
+    serverLeft = api.remaining(acc.credits);
+    budget.set(acc, Math.min(serverLeft.minutes, serverLeft.videos));
     return acc;
   };
 
@@ -101,23 +135,47 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
     return accountPromise;
   };
 
-  const creditsLeft = async (acc) => rask.remaining(await withProxy(acc.proxy, () => rask.getCredits(acc.tokens)));
+  const creditsLeft = async (acc) => api.remaining(await api.withProxy(acc.proxy, () => api.getCredits(acc.tokens)));
 
-  /** Take one of the account's minutes. Waits while other projects are running. */
-  const reserveSlot = async () => {
+  /** An error that means "this account is spent, a fresh one is already open". */
+  const freshAccountError = () => {
+    const err = new Error('account out of minutes — retrying on the fresh account');
+    err.freshAccount = true;
+    return err;
+  };
+
+  /**
+   * Retire the account we looked at, but only if it is still the current one.
+   * Parallel workers hit the last minute at the same moment; without this check
+   * the second one would retire the account the first one just opened.
+   */
+  const retireIfCurrent = (observed) => {
+    if (account && account === observed) retire('out of minutes');
+  };
+
+  /**
+   * Take one of `acc`'s minutes. Waits while that account's other projects are
+   * running, and refuses to charge an account the caller is not using: another
+   * worker may have retired it while this chunk was uploading.
+   */
+  const reserveSlot = async (acc) => {
     for (let i = 0; i < 90; i++) {
+      if (account !== acc) throw freshAccountError();
       if (slots() >= 1) {
-        inFlight += 1;
+        reserved.set(acc, inFlight(acc) + 1);
+        budget.set(acc, (budget.get(acc) || 0) - 1);
         return;
       }
-      if (inFlight === 0) {
-        retire('out of minutes');
-        throw new Error('retry on a fresh account');
+      if (inFlight(acc) === 0) {
+        retireIfCurrent(acc);
+        // Nothing was charged: the caller may retry this chunk on a fresh
+        // account without losing upload work.
+        throw freshAccountError();
       }
-      await sleep(2000);
+      await api.sleep(2000);
     }
-    retire('waited too long for a free slot');
-    throw new Error('retry on a fresh account');
+    retireIfCurrent(acc);
+    throw freshAccountError();
   };
 
   /**
@@ -125,76 +183,94 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
    * project is wasted work (and, before this check, a four-minute wait).
    */
   const waitForRoom = async () => {
+    const observed = account;
     for (let i = 0; i < 90; i++) {
       if (slots() >= 1) return;
-      if (inFlight === 0) {
-        retire('out of minutes');
+      if (inFlight() === 0) {
+        retireIfCurrent(observed);
         await ensureAccount();
         return;
       }
-      await sleep(2000);
+      await api.sleep(2000);
     }
-    retire('waited too long for a free slot');
+    retireIfCurrent(observed);
     await ensureAccount();
   };
 
   const dubOne = async (chunk) => {
     const name = chunkName(chunk.index);
-    await ensureAccount();
-    await waitForRoom();
 
-    const acc = account;
-    log(`[${name}] ${chunk.duration.toFixed(2)}s -> Rask (${slots()} free slot(s) on ${acc.email})`);
-    const started = Date.now();
-    let reserved = false;
+    // An account can run out between `waitForRoom` and the project creation,
+    // and the reservation is the only paid call. Nothing has been spent when it
+    // fails, so start over on the fresh account instead of failing the chunk.
+    for (let attempt = 1; ; attempt++) {
+      await ensureAccount();
+      await waitForRoom();
 
-    try {
-      const result = await withProxy(acc.proxy, () => rask.dubAudio({
-        tokens: acc.tokens,
-        spaceId: acc.spaceId,
-        audioFile: planFile(workDir, chunk.file),
-        name,
-        dstLang: cfg.target,
-        workDir: cfg.raskDir,
-        // Upload is free; this is what actually costs a minute.
-        beforeCreate: async () => {
-          await reserveSlot();
-          reserved = true;
-        },
-      }));
+      const acc = account;
+      log(`[${name}] ${chunk.duration.toFixed(2)}s -> Rask (${slots()} free slot(s) on ${acc.email})`);
+      const started = Date.now();
+      let tookSlot = false;
 
-      const raw = await extractAudioFromMp4(result.file, path.join(cfg.dubDir, `${name}-raw.mp3`));
-      const fitted = path.join(cfg.dubDir, `${name}.mp3`);
-      const used = await fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
-      const file = fs.existsSync(fitted) ? fitted : used;
+      try {
+        const result = await api.withProxy(acc.proxy, () => api.dubAudio({
+          tokens: acc.tokens,
+          spaceId: acc.spaceId,
+          audioFile: planFile(workDir, chunk.file),
+          name,
+          dstLang: cfg.target,
+          workDir: cfg.raskDir,
+          // Upload is free; this is what actually costs a minute.
+          beforeCreate: async () => {
+            await reserveSlot(acc);
+            tookSlot = true;
+          },
+        }));
 
-      state.chunks[chunk.index] = {
-        file: path.relative(workDir, file),
-        done: true,
-        start: chunk.start,
-        end: chunk.end,
-        duration: chunk.duration,
-        projectId: result.projectId,
-        raskDuration: result.duration,
-        seconds: Math.round((Date.now() - started) / 1000),
-      };
-      saveState();
-      log(`[${name}] ready in ${state.chunks[chunk.index].seconds}s`);
-    } catch (err) {
-      // A parked project means the whole account is unusable: stop spending
-      // minutes on it and let the caller try a fresh one right away.
-      if (err?.accountSuspect && account === acc) {
-        retire(`project ${err.stalled ? `stalled at "${err.status || 'unknown'}"` : 'never finished'}`);
-        err.freshAccount = true;
-      }
-      throw err;
-    } finally {
-      // Always release the slot, even when the project failed mid-flight.
-      if (reserved) inFlight = Math.max(0, inFlight - 1);
-      if (reserved && account === acc) {
-        try {
-          serverLeft = await creditsLeft(acc);
-        } catch { /* keep the previous estimate */ }
+        const raw = await api.extractAudioFromMp4(result.file, path.join(cfg.dubDir, `${name}-raw.mp3`));
+        const fitted = path.join(cfg.dubDir, `${name}.mp3`);
+        const used = await api.fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
+        const file = fs.existsSync(fitted) ? fitted : used;
+
+        state.chunks[chunk.index] = {
+          file: path.relative(workDir, file),
+          done: true,
+          start: chunk.start,
+          end: chunk.end,
+          duration: chunk.duration,
+          projectId: result.projectId,
+          raskDuration: result.duration,
+          seconds: Math.round((Date.now() - started) / 1000),
+        };
+        saveState();
+        log(`[${name}] ready in ${state.chunks[chunk.index].seconds}s`);
+        return;
+      } catch (err) {
+        // A parked project means the whole account is unusable: stop spending
+        // minutes on it and let the caller try a fresh one right away. The flag
+        // is set even when another worker already retired it, so this chunk
+        // does not sit out the 15s backoff for an account that is gone.
+        if (err?.accountSuspect) {
+          if (account === acc) {
+            retire(`project ${err.stalled ? `stalled at "${err.status || 'unknown'}"` : 'never finished'}`);
+          }
+          err.freshAccount = true;
+        }
+        if (err?.freshAccount && !tookSlot && attempt < 3) {
+          log(`[${name}] ${acc.email} was already spent — moving to a fresh account before the project starts`);
+          continue;
+        }
+        throw err;
+      } finally {
+        // Always release the slot, even when the project failed mid-flight.
+        if (tookSlot) {
+          reserved.set(acc, Math.max(0, (reserved.get(acc) || 0) - 1));
+          // Refresh this account's budget — but only if it is still the current
+          // one. A late answer for a retired account must never overwrite the
+          // fresh account's numbers (that used to retire brand-new accounts).
+          const snapshot = await creditsLeft(acc).catch(() => null);
+          if (snapshot && account === acc) serverLeft = snapshot;
+        }
       }
     }
   };
@@ -218,7 +294,7 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState }) {
                 log(`[chunk ${chunk.index}] attempt ${attempt}/${tries} failed (${short}) — switching to a fresh account`);
               } else {
                 log(`[chunk ${chunk.index}] attempt ${attempt}/${tries} failed (${short}); retrying in ${15 * attempt}s`);
-                await sleep(15_000 * attempt);
+                await api.sleep(15_000 * attempt);
               }
               continue;
             }
