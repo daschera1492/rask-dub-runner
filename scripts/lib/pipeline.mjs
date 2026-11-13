@@ -18,17 +18,34 @@ import { loadPlan, savePlan, assignShards } from './plan.mjs';
 import { dubQueue, chunkName, planFile, dubbedFile } from './dub.mjs';
 import { log, warn, setOutput, summary, formatSeconds } from './report.mjs';
 import * as media from './media.mjs';
+import { isYouTube, downloadYoutube, cookieJar } from './youtube.mjs';
 
 export { loadPlan };
 
 const inputName = (value) => (path.basename(String(value).split('?')[0]) || 'input.mp4')
   .replace(/[^A-Za-z0-9_.\-]/g, '_');
 
-/** Local path, or download the URL once into WORK_DIR. */
+/**
+ * Local path, download the URL once into WORK_DIR, or resolve a YouTube link
+ * with yt-dlp (which is the only supported way to turn a watch page into a
+ * file). Both prepare and merge call this, so the download is cached by name
+ * and each stage gets the same path.
+ */
 export async function resolveInput(cfg) {
   if (!cfg.input) throw new Error('INPUT_URL (or a local path) is required');
   if (fs.existsSync(cfg.input)) return path.resolve(cfg.input);
   if (!/^https?:\/\//i.test(cfg.input)) throw new Error(`input not found: ${cfg.input}`);
+
+  if (isYouTube(cfg.input)) {
+    return downloadYoutube(cfg.input, {
+      workDir: cfg.workDir,
+      cookies: cookieJar(cfg),
+      ytdlp: cfg.ytdlp,
+      format: cfg.ytFormat,
+      extra: cfg.ytdlpArgs,
+      log,
+    });
+  }
 
   fs.mkdirSync(cfg.workDir, { recursive: true });
   const dest = path.join(cfg.workDir, inputName(cfg.input));

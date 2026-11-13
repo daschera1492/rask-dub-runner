@@ -91,6 +91,14 @@ export const cfg = {
 
   outputName: (env.OUTPUT_NAME || '').trim(),
 
+  // Source download. Plain http(s) links still go through curl; a YouTube link
+  // is resolved by yt-dlp, which needs a cookie jar for most cloud IPs.
+  ytdlp: (env.YTDLP || 'yt-dlp').trim(),
+  ytCookies: env.YT_COOKIES || '',
+  ytCookiesFile: (env.YT_COOKIES_FILE || '').trim(),
+  ytFormat: (env.YT_FORMAT || 'bv*+ba/b').trim(),
+  ytdlpArgs: (env.YTDLP_ARGS || '').trim(),
+
   // Rask's translation prompt (tone/style). It must be set when the project is
   // created: the pipeline reads it during the first translation pass, and Free
   // projects cannot be re-dubbed afterwards. The colloquial default applies to

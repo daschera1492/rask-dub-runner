@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'لینک ویدیو — آدرس مستقیم فایل (mp4 / mov / mkv) یا مسیر محلی'
+        description: 'لینک ویدیو — لینک یوتیوب، آدرس مستقیم فایل (mp4 / mov / mkv) یا مسیر محلی'
         required: true
         type: string
       target_lang:
@@ -193,6 +193,10 @@ jobs:
       shards: ${{ steps.prepare.outputs.shards }}
       chunks: ${{ steps.prepare.outputs.chunks }}
       duration: ${{ steps.prepare.outputs.duration }}
+    env:
+      # Only this stage and merge download the source; a YouTube link goes
+      # through yt-dlp, which needs a signed-in session from a cloud IP.
+      YT_COOKIES: ${{ secrets.YT_COOKIES }}
     steps:
       - uses: actions/checkout@v4
 
@@ -206,11 +210,12 @@ jobs:
           node-version: '22'
 
       - uses: ./.github/actions/setup-ffmpeg
+      - uses: ./.github/actions/setup-ytdlp
 
-      # Pure node, no network, no ffmpeg: catches a broken account pool before
-      # any addresses or minutes are spent.
-      - name: Test account pool and publish guard
-        run: node test/dub-queue.test.mjs
+      # Pure node, no network, no ffmpeg: catches a broken account pool and a
+      # broken yt-dlp/cookie path before any addresses or minutes are spent.
+      - name: Test account pool, publish guard and YouTube source
+        run: npm test
 
       # Better chunk boundaries (cuts in pauses instead of mid-sentence).
       # Optional: the runner falls back to ffmpeg silencedetect when absent.
@@ -298,6 +303,10 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Merge re-resolves the source to mux onto it, so a YouTube link has to
+      # be downloaded here too (the plan's path belongs to the prepare runner).
+      YT_COOKIES: ${{ secrets.YT_COOKIES }}
     steps:
       - uses: actions/checkout@v4
 
@@ -310,6 +319,7 @@ jobs:
           node-version: '22'
 
       - uses: ./.github/actions/setup-ffmpeg
+      - uses: ./.github/actions/setup-ytdlp
 
       - name: Download plan + chunks
         continue-on-error: true

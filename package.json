@@ -9,8 +9,8 @@
     "prepare": "node scripts/prepare.mjs",
     "dub": "node scripts/dub-worker.mjs",
     "merge": "node scripts/merge.mjs",
-    "test": "node test/dub-queue.test.mjs",
-    "check": "node --check scripts/run.mjs && node --check scripts/prepare.mjs && node --check scripts/dub-worker.mjs && node --check scripts/merge.mjs && node --check scripts/lib/config.mjs && node --check scripts/lib/plan.mjs && node --check scripts/lib/dub.mjs && node --check scripts/lib/pipeline.mjs && node --check scripts/lib/rask.mjs && node --check scripts/lib/media.mjs && node --check scripts/lib/http.mjs && node --check scripts/lib/emailnator.mjs && node --check scripts/lib/proxy.mjs && node --check scripts/lib/report.mjs && node --check test/dub-queue.test.mjs && node test/dub-queue.test.mjs"
+    "test": "node test/dub-queue.test.mjs && node test/youtube.test.mjs",
+    "check": "node --check scripts/run.mjs && node --check scripts/prepare.mjs && node --check scripts/dub-worker.mjs && node --check scripts/merge.mjs && node --check scripts/lib/config.mjs && node --check scripts/lib/plan.mjs && node --check scripts/lib/dub.mjs && node --check scripts/lib/pipeline.mjs && node --check scripts/lib/rask.mjs && node --check scripts/lib/media.mjs && node --check scripts/lib/http.mjs && node --check scripts/lib/emailnator.mjs && node --check scripts/lib/proxy.mjs && node --check scripts/lib/youtube.mjs && node --check scripts/lib/report.mjs && node --check test/dub-queue.test.mjs && node --check test/youtube.test.mjs && node test/dub-queue.test.mjs && node test/youtube.test.mjs"
   },
   "engines": {
     "node": ">=20"
