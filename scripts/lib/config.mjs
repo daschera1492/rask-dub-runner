@@ -28,6 +28,28 @@ const ON_FAIL = ['original', 'silence', 'error'].includes(onFailRaw)
 
 const shardRaw = env.SHARD === undefined ? '' : String(env.SHARD).trim();
 
+/**
+ * Default tone prompt for every project the runner creates.
+ *
+ * Rask reads the project prompt during the first translation pass, so it is sent
+ * with the create call. The wording below is deliberately blunt: models drift
+ * back to written Persian ("باید کلیک کنید") unless the colloquial register and
+ * the second-person singular are spelled out with examples.
+ */
+export const DEFAULT_TRANSLATION_PROMPT = [
+  'Translate in a fully spoken, colloquial, friendly tone — one friend talking to another.',
+  'It must never read like written, formal or bookish text.',
+  'Use second-person singular and everyday contractions instead of formal address.',
+  'اگر زبان مقصد فارسی است، این قواعد اجباری است: کاملاً گفتاری و خودی بنویس؛',
+  '«باید اینجا کلیک کنی» درست است و «باید اینجا کلیک کنید» غلط؛',
+  'از «تو، میتونی، میدونی، میخوای، ببین، خب، راستش، بابا، داداش، یه، واسه، بذار، دیگه، یعنی» استفاده کن؛',
+  '«می‌باشد» → «هست»، «آن را» → «اونو»، «شما» → «تو»، «گردید» → «شد»، «خواهم» → «می‌خوام».',
+  'Keep the meaning exact, add or drop nothing, and keep sentences short and natural so they fit the voice timing.',
+].join(' ');
+
+const promptRaw = String(env.TRANSLATION_PROMPT ?? '').trim();
+const promptOff = ['off', 'none', '0', 'false', 'no'].includes(promptRaw.toLowerCase());
+
 export const cfg = {
   input: env.INPUT_URL || env.INPUT || '',
   target: rask.resolveLanguage(env.TARGET_LANG || 'Persian'),
@@ -57,8 +79,9 @@ export const cfg = {
 
   // Rask's translation prompt (tone/style). It must be set when the project is
   // created: the pipeline reads it during the first translation pass, and Free
-  // projects cannot be re-dubbed afterwards.
-  translationPrompt: (env.TRANSLATION_PROMPT || '').trim() || null,
+  // projects cannot be re-dubbed afterwards. The colloquial default applies to
+  // every run unless TRANSLATION_PROMPT overrides it (or is set to "off").
+  translationPrompt: promptOff ? null : (promptRaw || DEFAULT_TRANSLATION_PROMPT),
 
   // Parallel runners: the prepare stage splits the timeline into N shards and
   // the workflow runs one dub job per shard.

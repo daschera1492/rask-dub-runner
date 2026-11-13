@@ -116,7 +116,7 @@ Actions → **Rask dub** → `video_url` و `target_lang`.
 | `SKIP_SILENT` | `true` | تکهٔ بی‌دیالوگ آپلود نشود |
 | `WHISPER_MODEL` | `base` | مدل Whisper |
 | `OUTPUT_NAME` | خالی | نام فایل خروجی |
-| `TRANSLATION_PROMPT` | خالی | پرامپت لحن/سبک ترجمه (مثلاً فارسی خودمانی) |
+| `TRANSLATION_PROMPT` | پرامپت گفتاری | لحن ترجمه؛ خالی = پیش‌فرضِ گفتاری/صمیمی، `off` = بدون پرامپت |
 | `WORK_DIR` | `work` | پوشهٔ کار، کش تکه‌ها و `plan.json` |
 | `PROXY_OXYLABS` | خالی | پروکسی Oxylabs: `host:port:user:pass` |
 | `PROXY_ENABLED` | خودکار | `false`/`0` = خاموش |
@@ -141,3 +141,5 @@ Actions → **Rask dub** → `video_url` و `target_lang`.
 - برای تست سریع یک کلیپ کوتاه **با گفتار** بده.
 - `TRANSLATION_PROMPT` را هنگام ساخت پروژه می‌فرستیم، چون پایپ‌لاین آن را در همان
   ترجمهٔ اول می‌خواند و روی پلن Free امکان دوبلهٔ مجدد (Apply changes) وجود ندارد.
+  پیش‌فرضش یک پرامپت گفتاری/صمیمی است («کلیک کنی» نه «کلیک کنید»)؛ برای خاموش کردنش
+  `TRANSLATION_PROMPT=off` بده.

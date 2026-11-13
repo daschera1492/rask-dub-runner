@@ -128,7 +128,7 @@ on:
         default: ''
         type: string
       translation_prompt:
-        description: 'اختیاری — پرامپت لحن/سبک ترجمه (مثلاً فارسی خودمانی)؛ باید هنگام ساخت پروژه ست شود'
+        description: 'اختیاری — پرامپت لحن/سبک ترجمه؛ خالی = پرامپت پیش‌فرضِ گفتاری و صمیمی، off = بدون پرامپت'
         required: false
         default: ''
         type: string
