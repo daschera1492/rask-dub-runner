@@ -243,15 +243,20 @@ export function getProject(tokens, spaceId, projectId) {
  * Poll a project until the localized file exists.
  *
  * Rask occasionally parks a project in one status forever (seen with very
- * short or speech-less uploads: `transcription_started` never advances). A
- * stall watchdog fails fast instead of burning the whole timeout.
+ * short, speech-less or unlucky uploads: `transcription_started` never
+ * advances), and every project on that same account parks with it. A fresh
+ * account is the only way out, so the watchdog fails fast: a healthy project
+ * finishes in 70-270 s, and 4 idle minutes mean the account is dead weight.
+ *
+ * Errors carry `stalled = true` and `accountSuspect = true` so the caller can
+ * retire the account instead of burning another minute on it.
  *
  * @returns {Promise<object>} the finished project record
  */
 export async function waitForProject(tokens, spaceId, projectId, {
   timeoutMs = 20 * 60_000,
   pollMs = 5000,
-  stallMs = 8 * 60_000,
+  stallMs = 4 * 60_000,
   onTick = () => {},
 } = {}) {
   const deadline = Date.now() + timeoutMs;
@@ -264,17 +269,34 @@ export async function waitForProject(tokens, spaceId, projectId, {
       changedAt = Date.now();
       onTick(project);
     }
-    if (project.error_message) throw new Error(`rask project failed: ${project.error_message}`);
+    if (project.error_message) {
+      const err = new Error(`rask project failed: ${project.error_message}`);
+      err.projectId = projectId;
+      err.status = project.status;
+      throw err;
+    }
     if (project.translated_video || project.translated_audio) return project;
     if (Date.now() - changedAt > stallMs) {
-      throw new Error(`rask project ${projectId} stalled at "${last}" for ${Math.round(stallMs / 60000)}m`);
+      const err = new Error(
+        `rask project ${projectId} stalled at "${last}" for ${Math.round(stallMs / 60000)}m`,
+      );
+      err.stalled = true;
+      err.accountSuspect = true;
+      err.projectId = projectId;
+      err.status = last;
+      throw err;
     }
     await sleep(pollMs);
   }
-  throw new Error(`rask project ${projectId} timed out at "${last}"`);
+  const err = new Error(`rask project ${projectId} timed out at "${last}"`);
+  err.stalled = true;
+  err.accountSuspect = true;
+  err.projectId = projectId;
+  err.status = last;
+  throw err;
 }
 
-export async function startAccount({ emailnator }) {
+export async function startAccount({ emailnator, otpWaitSeconds = 180 }) {
   const password = randomPassword();
   let lastError;
 
@@ -286,22 +308,23 @@ export async function startAccount({ emailnator }) {
     });
     try {
       await signUp(email, password);
-      console.log(`[account] ${email} signed up`);
-      const { code } = await emailnator.waitForCode(email, { waitSeconds: 180 });
+      console.log(`${new Date().toISOString()} [account] ${email} signed up`);
+      // The wrapper in run.mjs already defaults waitSeconds from
+      // OTP_WAIT_SECONDS; passing it explicitly used to overwrite that value.
+      const { code } = await emailnator.waitForCode(email, { waitSeconds: otpWaitSeconds });
       await confirmSignUp(email, code);
-      console.log(`[account] ${email} confirmed`);
+      console.log(`${new Date().toISOString()} [account] ${email} confirmed`);
       const tokens = await login(email, password);
       await bootstrap(tokens);
       const space = await getSpace(tokens);
       const credits = await getCredits(tokens);
-      console.log(`[account] ${email} ready (space ${space.id}, credits ${JSON.stringify(remaining(credits))})`);
-      console.log(`[account] ${email} password ${password}`);
+      console.log(`${new Date().toISOString()} [account] ${email} ready (space ${space.id}, credits ${JSON.stringify(remaining(credits))})`);
       return { email, password, tokens, spaceId: space.id, credits };
     } catch (err) {
       lastError = err;
       if (err?.cognitoType === 'UsernameExistsException') continue;
       if (attempt === 3) break;
-      console.warn(`[account] attempt ${attempt} failed: ${String(err.message).slice(0, 200)}`);
+      console.warn(`${new Date().toISOString()} [account] attempt ${attempt} failed: ${String(err.message).slice(0, 200)}`);
       await sleep(3000 * attempt);
     }
   }

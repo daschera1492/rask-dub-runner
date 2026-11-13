@@ -536,12 +536,27 @@ export async function fitChunkAudio(input, outFile, seconds, { index = 0 } = {})
   return outFile;
 }
 
-/** Generate a silent MP3 of an exact length (placeholder for failed chunks). */
+/**
+ * Pull the dubbed track out of the MP4 Rask returns.
+ *
+ * The returned "video" is a placeholder picture plus the dubbed audio, so the
+ * picture is dropped and only the audio survives. Encoding here is lossless
+ * enough (q2) and, more importantly, gives `fitChunkAudio` a file it can probe.
+ */
+export async function extractAudioFromMp4(mp4, outMp3) {
+  fs.mkdirSync(path.dirname(outMp3), { recursive: true });
+  await sh('ffmpeg', ['-y', '-v', 'error', '-i', mp4, '-vn', '-c:a', 'libmp3lame', '-q:a', '2', outMp3]);
+  return outMp3;
+}
+
+/** Generate a silent MP3 of an exact length (only when ON_FAIL=silence). */
 export async function silenceMp3(seconds, outFile) {
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
+  // Same format as every other piece (44.1 kHz stereo), otherwise a mixed
+  // concat is at the mercy of the demuxer.
   await sh('ffmpeg', [
     '-y', '-v', 'error',
-    '-f', 'lavfi', '-i', 'anullsrc=r=24000:cl=mono',
+    '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo',
     '-t', seconds.toFixed(3),
     '-c:a', 'libmp3lame', '-q:a', '2',
     outFile,
@@ -549,13 +564,42 @@ export async function silenceMp3(seconds, outFile) {
   return outFile;
 }
 
-/** Re-encode and concatenate dubbed MP3 chunks with tiny fades. */export async function concatDubbed(mp3Paths, outMp3) {
+/* Common output format for every piece of the final track. */
+const TRACK_FORMAT = 'aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo';
+
+/**
+ * Concatenate the timeline into ONE track, sample-accurately.
+ *
+ * The old path concatenated MP3 files, and every MP3 encode pads its last frame
+ * to a 1152-sample boundary (~26 ms at 44.1 kHz). That error is always positive,
+ * so it accumulated: 46 chunks came out 0.92 s longer than the source and the
+ * audio drifted behind the picture.
+ *
+ * Here each piece is decoded, forced to the exact slot length (`apad`+`atrim`),
+ * trimmed to its own timestamps and joined in the filter graph, and the result is
+ * encoded to MP3 exactly once. Slot lengths sum to the source duration, so the
+ * muxed track lines up with the video from the first frame to the last.
+ *
+ * @param {Array<{path:string, duration:number}>} pieces
+ * @param {string} outMp3
+ */
+export async function concatTrack(pieces, outMp3) {
+  if (!pieces.length) throw new Error('concatTrack: nothing to concatenate');
   fs.mkdirSync(path.dirname(outMp3), { recursive: true });
-  const listFile = outMp3.replace(/\.mp3$/i, '') + '.txt';
-  fs.writeFileSync(listFile, mp3Paths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join('\n') + '\n');
+
+  const args = ['-y', '-v', 'error'];
+  for (const piece of pieces) args.push('-i', piece.path);
+
+  const filters = pieces.map((piece, i) => (
+    `[${i}:a]${TRACK_FORMAT},apad,atrim=0:${Math.max(0.05, piece.duration).toFixed(3)},asetpts=PTS-STARTPTS[p${i}]`
+  ));
+  const labels = pieces.map((_, i) => `[p${i}]`).join('');
+  filters.push(`${labels}concat=n=${pieces.length}:v=0:a=1[out]`);
+
   await sh('ffmpeg', [
-    '-y', '-v', 'error',
-    '-f', 'concat', '-safe', '0', '-i', listFile,
+    ...args,
+    '-filter_complex', filters.join(';'),
+    '-map', '[out]',
     '-c:a', 'libmp3lame', '-q:a', '2',
     outMp3,
   ]);
