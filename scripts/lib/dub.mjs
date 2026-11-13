@@ -197,8 +197,42 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState, deps = 
     await ensureAccount();
   };
 
+  // Turn whatever Rask returned into the fitted chunk the merge expects, then
+  // persist it. Shared by the fresh call and the cached-file path below.
+  const finishDub = async (chunk, name, { file, projectId, duration }, started) => {
+    const raw = await api.extractAudioFromMp4(file, path.join(cfg.dubDir, `${name}-raw.mp3`));
+    const fitted = path.join(cfg.dubDir, `${name}.mp3`);
+    const used = await api.fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
+    const out = fs.existsSync(fitted) ? fitted : used;
+
+    state.chunks[chunk.index] = {
+      file: path.relative(workDir, out),
+      done: true,
+      start: chunk.start,
+      end: chunk.end,
+      duration: chunk.duration,
+      projectId,
+      raskDuration: duration,
+      seconds: Math.round((Date.now() - started) / 1000),
+    };
+    saveState(state);
+    log(`[${name}] ready in ${state.chunks[chunk.index].seconds}s`);
+  };
+
   const dubOne = async (chunk) => {
     const name = chunkName(chunk.index);
+
+    // A dub that was already downloaded is already paid for. If anything died
+    // between the download and the state write (crash, cancel, full disk), reuse
+    // the file instead of billing a second Rask project for the same chunk.
+    try {
+      const cached = path.join(cfg.raskDir, `${name}-rask.mp4`);
+      if (fs.statSync(cached).size > 1024) {
+        log(`[${name}] reusing the dub already downloaded`);
+        await finishDub(chunk, name, { file: cached, projectId: 'reused', duration: 0 }, Date.now());
+        return;
+      }
+    } catch { /* nothing cached */ }
 
     // An account can run out between `waitForRoom` and the project creation,
     // and the reservation is the only paid call. Nothing has been spent when it
@@ -227,23 +261,7 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState, deps = 
           },
         }));
 
-        const raw = await api.extractAudioFromMp4(result.file, path.join(cfg.dubDir, `${name}-raw.mp3`));
-        const fitted = path.join(cfg.dubDir, `${name}.mp3`);
-        const used = await api.fitChunkAudio(raw, fitted, chunk.duration, { index: chunk.index });
-        const file = fs.existsSync(fitted) ? fitted : used;
-
-        state.chunks[chunk.index] = {
-          file: path.relative(workDir, file),
-          done: true,
-          start: chunk.start,
-          end: chunk.end,
-          duration: chunk.duration,
-          projectId: result.projectId,
-          raskDuration: result.duration,
-          seconds: Math.round((Date.now() - started) / 1000),
-        };
-        saveState();
-        log(`[${name}] ready in ${state.chunks[chunk.index].seconds}s`);
+        await finishDub(chunk, name, result, started);
         return;
       } catch (err) {
         // A parked project means the whole account is unusable: stop spending

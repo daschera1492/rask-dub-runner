@@ -64,9 +64,11 @@ function loadState(cfg, key) {
   return { key, chunks: {} };
 }
 
-function saveState(cfg, state) {
+function saveState(cfg, state = {}) {
   fs.mkdirSync(path.dirname(cfg.stateFile), { recursive: true });
-  fs.writeFileSync(cfg.stateFile, JSON.stringify(state, null, 2));
+  // `JSON.stringify(undefined)` is undefined, and writing that throws a very
+  // confusing "data argument must be of type string" error from inside fs.
+  fs.writeFileSync(cfg.stateFile, JSON.stringify({ chunks: {}, ...state }, null, 2));
 }
 
 /* ------------------------------------------------------------------ */
@@ -198,7 +200,7 @@ export async function dubPlan(cfg, plan, { shard = cfg.shard } = {}) {
     + `${skipped ? `, ${skipped} without dialogue` : ''}`);
 
   const result = pending.length
-    ? await dubQueue({ chunks: pending, cfg, workDir: cfg.workDir, state, saveState: (s) => saveState(cfg, s) })
+    ? await dubQueue({ chunks: pending, cfg, workDir: cfg.workDir, state, saveState: () => saveState(cfg, state) })
     : { accountsOpened: 0, attempts: 0, failures: [] };
 
   const totalDubbed = chunks.filter((chunk) => dubbedFile(cfg.workDir, chunk.index)).length;

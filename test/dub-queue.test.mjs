@@ -145,7 +145,17 @@ const check = (label, ok, detail = '') => {
 };
 
 const state = { chunks: {} };
+const stateFile = path.join(work, 'state.json');
 const saves = [];
+// Same contract as pipeline.mjs: the payload must carry the chunk state, or
+// JSON.stringify returns undefined and fs throws a useless "data argument"
+// error deep inside the queue.
+const saveState = (payload) => {
+  const json = JSON.stringify(payload);
+  if (!json) throw new TypeError('saveState was called without the state payload');
+  fs.writeFileSync(stateFile, json);
+  saves.push(Object.keys(payload.chunks).length);
+};
 const { deps, state: fake } = makeFakeRask();
 
 const result = await dubLib.dubQueue({
@@ -153,7 +163,7 @@ const result = await dubLib.dubQueue({
   cfg,
   workDir: work,
   state,
-  saveState: () => saves.push(Object.keys(state.chunks).length),
+  saveState,
   deps,
 });
 
@@ -165,6 +175,9 @@ check('a stalled project retires its account at once', fake.stalledAccounts.leng
 check('the poisoned account dubbed nothing',
   ![...fake.chunkAccounts.values()].includes('acc1@gmail.com'));
 check('every success was persisted', Object.keys(state.chunks).length === 6, `${saves.length} saves`);
+check('the state file on disk parses and holds all 6 chunks',
+  JSON.parse(fs.readFileSync(stateFile, 'utf8')).chunks
+  && Object.keys(JSON.parse(fs.readFileSync(stateFile, 'utf8')).chunks).length === 6);
 check('the failing chunk used 1 + 2 attempts (queue + two rounds)',
   saves.length === 6 && result.attempts >= 11, `attempts=${result.attempts}`);
 
@@ -238,6 +251,38 @@ check('no account is sold more minutes than it has',
 check('no project is created twice', seen.length === 9, seen.join(' '));
 check('5 chunks failed (the even ones)', r2.failures.length === 5,
   r2.failures.map((f) => f[0]).join(','));
+
+/* ------------------------------------------------------------------ */
+/* A dub that is already on disk must never be billed twice.          */
+/* ------------------------------------------------------------------ */
+
+console.log('\n--- reuse a dub that was already downloaded ---');
+const work3 = path.join(tmp, 'work3');
+fs.mkdirSync(path.join(work3, 'dub'), { recursive: true });
+fs.mkdirSync(path.join(work3, 'rask'), { recursive: true });
+// The crash this guards against happens between the download and the state
+// write, so the paid mp4 is on disk while the chunk has no state entry.
+fs.writeFileSync(path.join(work3, 'rask', 'chunk-000-rask.mp4'), 'x'.repeat(2048));
+
+let billed = 0;
+const reuseDeps = {
+  ...rolloverDeps,
+  dubAudio: async () => { billed += 1; return { file: '', projectId: 'p', duration: 50 }; },
+};
+const reuseState = { chunks: {} };
+const r3 = await dubLib.dubQueue({
+  chunks: [{ index: 0, start: 0, end: 50, duration: 50, file: 'c.m4a' }],
+  cfg: { ...cfg, parallel: 1, chunkTries: 1, retryRounds: 0, dubDir: path.join(work3, 'dub'), raskDir: path.join(work3, 'rask') },
+  workDir: work3,
+  state: reuseState,
+  saveState: () => {},
+  deps: reuseDeps,
+});
+
+check('no Rask project is created for a cached dub', billed === 0 && r3.accountsOpened === 0,
+  `billed ${billed}, accounts ${r3.accountsOpened}`);
+check('the cached dub is recorded as done', reuseState.chunks[0]?.projectId === 'reused' && r3.failures.length === 0,
+  JSON.stringify(reuseState.chunks[0] || {}));
 
 fs.rmSync(tmp, { recursive: true, force: true });
 
