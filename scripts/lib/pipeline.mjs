@@ -279,7 +279,20 @@ export async function merge(cfg, plan) {
   const holes = [];
   const stats = { dubbed: 0, original: 0, silent: 0 };
 
-  const input = plan.isVideo ? await resolveInput(cfg) : null;
+  // The dubbed audio is the product; the video is a bonus. Re-fetching the
+  // source here used to be able to kill a run whose dubbing was already paid
+  // for: a YouTube link answers "Sign in to confirm you're not a bot" from the
+  // second runner's IP even when prepare downloaded it fine minutes earlier.
+  // A missing source now downgrades the output to mp3 instead of failing.
+  let input = null;
+  if (plan.isVideo) {
+    try {
+      input = await resolveInput(cfg);
+    } catch (err) {
+      warn(`[mix] source video unavailable: ${String(err?.message || err).split('\n')[0]}`);
+      warn('[mix] publishing the dubbed audio only — the video mux is skipped');
+    }
+  }
 
   for (const chunk of plan.chunks) {
     const dubbed = dubbedFile(cfg.workDir, chunk.index);
@@ -351,7 +364,7 @@ export async function merge(cfg, plan) {
   fs.copyFileSync(cfg.trackFile, outMp3);
 
   let outMp4 = null;
-  if (plan.isVideo) {
+  if (plan.isVideo && input) {
     outMp4 = path.join(cfg.outDir, `${stem}.mp4`);
     await assembleFinal({ input, dubbedAudio: cfg.trackFile, outFile: outMp4, isVideo: true });
   }

@@ -128,6 +128,16 @@ check('a truncated file is not reused', /youtube-abc\.webm$/.test(yt.findDownloa
 
 check('another id does not match', yt.findDownload(work, 'xyz') === null);
 
+// yt-dlp writes `youtube-<id>.f251.webm` and `.part` while it works; a retry has
+// to start from a clean slate or it can merge onto a half-written file.
+fs.writeFileSync(path.join(work, 'youtube-abc.f251.webm'), Buffer.alloc(2048));
+fs.writeFileSync(path.join(work, 'youtube-abc.part'), Buffer.alloc(2048));
+check('leftovers are not mistaken for a finished download', /youtube-abc\.webm$/.test(yt.findDownload(work, 'abc')));
+check('partials are removed', yt.cleanPartials(work, 'abc') === 2);
+check('the finished file survives the cleanup', fs.existsSync(path.join(work, 'youtube-abc.webm')));
+check('a truncated final file is kept (size is findDownload\'s job)',
+  fs.existsSync(path.join(work, 'youtube-abc.mp4')));
+
 /* ------------------------------------------------------------------ */
 /* Missing binary                                                      */
 /* ------------------------------------------------------------------ */

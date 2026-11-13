@@ -247,6 +247,21 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # Hand the video itself to merge. A second yt-dlp call from another runner
+      # IP hits YouTube's "Sign in to confirm you're not a bot" even with the
+      # same cookies, which used to fail the run AFTER every chunk was dubbed
+      # and paid for. `youtube-*` only matches a yt-dlp download, so a direct
+      # link or a local file is never uploaded here, and compression is off
+      # because the video is already compressed.
+      - name: Upload YouTube source
+        uses: actions/upload-artifact@v4
+        with:
+          name: rask-source
+          path: ${{ runner.temp }}/work/youtube-*
+          if-no-files-found: ignore
+          retention-days: 1
+          compression-level: 0
+
   # ------------------------------------------------------------------ #
   # 2. Dub — one job per shard, all at the same time                    #
   # ------------------------------------------------------------------ #
@@ -335,6 +350,15 @@ jobs:
           pattern: rask-dub-*
           path: ${{ runner.temp }}/work
           merge-multiple: true
+
+      # The video prepare downloaded (YouTube only). When it is here, merge
+      # never calls yt-dlp and a second bot check cannot break the run.
+      - name: Download YouTube source
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: rask-source
+          path: ${{ runner.temp }}/work
 
       - name: Merge
         id: merge

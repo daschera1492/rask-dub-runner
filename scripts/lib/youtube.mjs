@@ -112,8 +112,24 @@ export function findDownload(workDir, id) {
   return found.find((file) => file.toLowerCase().endsWith('.mp4')) || found[0] || null;
 }
 
-/** yt-dlp argv. Kept pure so the offline test can assert on it. */
-export function ytdlpArgs({ url, template, cookies = null, format = 'bv*+ba/b', extra = '', jsRuntime = '' }) {
+/**
+ * Remove yt-dlp leftovers (`.f399.mp4`, `.part`, `.ytdl`) for this id, so a
+ * retry cannot merge onto a half-written file. Final files are kept.
+ */
+export function cleanPartials(workDir, id) {
+  const safe = String(id).replace(/[^A-Za-z0-9_-]/g, '');
+  const finalName = new RegExp(`^youtube-${safe}\\.(mp4|mkv|webm|mov)$`, 'i');
+  let removed = 0;
+  for (const entry of fs.readdirSync(workDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(`youtube-${safe}.`)) continue;
+    if (finalName.test(entry.name)) continue;
+    fs.rmSync(path.join(workDir, entry.name), { force: true });
+    removed += 1;
+  }
+  return removed;
+}
+
+/** yt-dlp argv. Kept pure so the offline test can assert on it. */export function ytdlpArgs({ url, template, cookies = null, format = 'bv*+ba/b', extra = '', jsRuntime = '' }) {
   const args = [
     // A watch url copied from a playlist carries `&list=`; without this,
     // yt-dlp happily downloads all 300 videos.
@@ -133,6 +149,8 @@ export function ytdlpArgs({ url, template, cookies = null, format = 'bv*+ba/b', 
   args.push(url);
   return args;
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const spawnInherit = (cmd, args) => new Promise((resolve) => {
   const child = spawn(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
@@ -172,6 +190,7 @@ export async function downloadYoutube(input, {
   ytdlp = 'yt-dlp',
   format = 'bv*+ba/b',
   extra = '',
+  attempts = 3,
   log = () => {},
 } = {}) {
   const id = videoId(input).replace(/[^A-Za-z0-9_-]/g, '');
@@ -183,7 +202,7 @@ export async function downloadYoutube(input, {
     return cached;
   }
 
-  log(`[input] youtube ${id} -> yt-dlp`);
+  log(`[input] youtube ${id} -> yt-dlp (cookies: ${cookies ? 'yes' : 'none'})`);
   const template = path.join(workDir, `youtube-${id}.%(ext)s`);
   const args = ytdlpArgs({
     url: input,
@@ -194,16 +213,29 @@ export async function downloadYoutube(input, {
     jsRuntime: await jsRuntime(ytdlp),
   });
 
-  const { code, error } = await spawnInherit(ytdlp, args);
-  if (error?.code === 'ENOENT') {
-    throw new Error(
-      `${ytdlp} is not installed — install it (https://github.com/yt-dlp/yt-dlp) or run the workflow, ` +
-      'which installs it in .github/actions/setup-ytdlp',
-    );
+  let code = -1;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    cleanPartials(workDir, id);
+    const result = await spawnInherit(ytdlp, args);
+    if (result.error?.code === 'ENOENT') {
+      throw new Error(
+        `${ytdlp} is not installed — install it (https://github.com/yt-dlp/yt-dlp) or run the workflow, ` +
+        'which installs it in .github/actions/setup-ytdlp',
+      );
+    }
+    code = result.code;
+    if (code === 0) break;
+    if (attempt < attempts) {
+      const waitMs = attempt * 5000;
+      log(`[input] yt-dlp failed (exit ${code}); retry ${attempt}/${attempts - 1} in ${waitMs / 1000}s`);
+      await sleep(waitMs);
+    }
   }
+
   if (code !== 0) {
     const hint = cookies
-      ? ''
+      ? ' — cookies were sent, but YouTube rejects the same session from another IP; that is why the ' +
+        'workflow hands the prepare download to merge as an artifact instead of downloading twice'
       : ' — no cookies configured: YouTube blocks most cloud runner IPs without a signed-in session, set YT_COOKIES';
     throw new Error(`yt-dlp failed (exit ${code}) for ${input}${hint}`);
   }
