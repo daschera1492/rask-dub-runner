@@ -307,6 +307,14 @@ export async function merge(cfg, plan) {
     );
   }
 
+  // ON_FAIL=original keeps a *few* failed chunks alive, but a mix with no dub at
+  // all is just the source audio. That is what a cancelled dub stage produces,
+  // and it must never be published as a "Dub → <language>" release.
+  const hasDialogue = plan.chunks.some((chunk) => chunk.hasSpeech !== false);
+  if (hasDialogue && stats.dubbed === 0) {
+    throw new Error('no chunk was dubbed — refusing to publish the undubbed source as a dub');
+  }
+
   log(`[mix] ${pieces.length} piece(s): ${stats.dubbed} dubbed, ${stats.original} original audio, ${stats.silent} silence`);
   await concatTrack(pieces, cfg.trackFile);
 

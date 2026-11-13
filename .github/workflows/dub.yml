@@ -203,7 +203,7 @@ jobs:
 
       # Pure node, no network, no ffmpeg: catches a broken account pool before
       # any addresses or minutes are spent.
-      - name: Test account pool
+      - name: Test account pool and publish guard
         run: node test/dub-queue.test.mjs
 
       # Better chunk boundaries (cuts in pauses instead of mid-sentence).
@@ -338,7 +338,10 @@ jobs:
           if-no-files-found: warn
 
       - name: Publish to release
-        if: always() && inputs.publish_release
+        # Only a successful merge has anything worth publishing. `always()` here
+        # meant a cancelled run shipped a release whose every chunk kept the
+        # original audio — a "dub" with no dub in it.
+        if: success() && inputs.publish_release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: dub-${{ github.run_number }}-${{ github.run_attempt }}

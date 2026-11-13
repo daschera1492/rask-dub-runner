@@ -284,6 +284,48 @@ check('no Rask project is created for a cached dub', billed === 0 && r3.accounts
 check('the cached dub is recorded as done', reuseState.chunks[0]?.projectId === 'reused' && r3.failures.length === 0,
   JSON.stringify(reuseState.chunks[0] || {}));
 
+/* ------------------------------------------------------------------ */
+/* A timeline with no dub at all must never be published as a dub.     */
+/* ------------------------------------------------------------------ */
+
+console.log('\n--- refuse to mix an undubbed timeline ---');
+const pipeline = await import(pathToFileURL(path.join(repo, 'scripts/lib/pipeline.mjs')).href);
+const work4 = path.join(tmp, 'work4');
+fs.mkdirSync(path.join(work4, 'dub'), { recursive: true });
+
+const plan4 = {
+  input: 'source.mp4',
+  target: 'fa-ir',
+  duration: 100,
+  isVideo: false,
+  chunks: [
+    { index: 0, start: 0, end: 50, duration: 50, file: 'chunks/chunk-000.m4a', hasSpeech: true },
+    { index: 1, start: 50, end: 100, duration: 50, file: 'chunks/chunk-001.m4a', hasSpeech: true },
+  ],
+};
+const cfg4 = {
+  ...cfg,
+  workDir: work4,
+  outDir: path.join(work4, 'out'),
+  dubDir: path.join(work4, 'dub'),
+  reportsDir: path.join(work4, 'reports'),
+  trackFile: path.join(work4, 'dubbed-full.mp3'),
+  stateFile: path.join(work4, 'state.json'),
+  outputName: '',
+  onFail: 'original',
+};
+
+let guard = null;
+try {
+  await pipeline.merge(cfg4, plan4);
+} catch (err) { guard = err; }
+// A cancelled dub stage leaves zero dubs on disk; ON_FAIL=original would happily
+// mux the source audio back and ship it as a Persian dub.
+check('a mix with zero dubs is rejected instead of published',
+  Boolean(guard) && /no chunk was dubbed/.test(String(guard.message)), String(guard?.message));
+check('nothing is written into out/ when the guard fires',
+  !fs.existsSync(path.join(work4, 'out', 'report.json')));
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 if (failures.length) {
