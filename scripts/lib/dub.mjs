@@ -261,6 +261,7 @@ export async function dubQueue({ chunks, cfg, workDir, state, saveState, deps = 
           audioFile: planFile(workDir, chunk.file),
           name,
           dstLang: cfg.target,
+          prompt: cfg.translationPrompt,
           workDir: cfg.raskDir,
           // Upload is free; this is what actually costs a minute.
           beforeCreate: async () => {

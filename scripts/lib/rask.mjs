@@ -218,7 +218,7 @@ export async function uploadAudio(tokens, spaceId, filePath, name = path.basenam
 }
 
 /** Create a dubbing project from an uploaded media id (audio-only uploads OK). */
-export function createProject(tokens, spaceId, { mediaId, name, dstLang }) {
+export function createProject(tokens, spaceId, { mediaId, name, dstLang, prompt = null }) {
   return api(`${APP}/api/project/?space_id=${spaceId}`, {
     method: 'POST',
     tokens,
@@ -228,7 +228,9 @@ export function createProject(tokens, spaceId, { mediaId, name, dstLang }) {
       dst_lang: dstLang,
       free_dubbing: false,
       src_lang: null,
-      prompt: null,
+      // The translation prompt is read while the first translation runs, so it
+      // has to be in place at creation time; there is no re-dub on Free.
+      prompt: prompt || null,
       space_id: spaceId,
       video_id: mediaId,
     },
@@ -335,7 +337,7 @@ export async function startAccount({ emailnator, otpWaitSeconds = 180 }) {
  * Dub one audio chunk on an account and save the dubbed audio locally.
  * @returns {Promise<{file:string, projectId:string, duration:number}>}
  */
-export async function dubAudio({ tokens, spaceId, audioFile, name, dstLang, workDir, onStatus = () => {}, beforeCreate = () => {} }) {
+export async function dubAudio({ tokens, spaceId, audioFile, name, dstLang, prompt = null, workDir, onStatus = () => {}, beforeCreate = () => {} }) {
   const media = await retry(() => uploadAudio(tokens, spaceId, audioFile, `${name}${path.extname(audioFile)}`), {
     attempts: 3, label: 'upload', delayMs: 4000,
   });
@@ -344,7 +346,7 @@ export async function dubAudio({ tokens, spaceId, audioFile, name, dstLang, work
   // The upload itself is free; creating the project is what costs a minute.
   await beforeCreate();
 
-  const project = await createProject(tokens, spaceId, { mediaId: media.id, name, dstLang });
+  const project = await createProject(tokens, spaceId, { mediaId: media.id, name, dstLang, prompt });
   const projectId = project.id;
   console.log(`[rask] ${name}: project ${projectId}`);
 

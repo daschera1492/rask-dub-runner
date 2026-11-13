@@ -55,6 +55,11 @@ export const cfg = {
 
   outputName: (env.OUTPUT_NAME || '').trim(),
 
+  // Rask's translation prompt (tone/style). It must be set when the project is
+  // created: the pipeline reads it during the first translation pass, and Free
+  // projects cannot be re-dubbed afterwards.
+  translationPrompt: (env.TRANSLATION_PROMPT || '').trim() || null,
+
   // Parallel runners: the prepare stage splits the timeline into N shards and
   // the workflow runs one dub job per shard.
   runners: clamp(num(env.PARALLEL_RUNNERS, 1), 1, 16),

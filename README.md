@@ -116,6 +116,7 @@ Actions → **Rask dub** → `video_url` و `target_lang`.
 | `SKIP_SILENT` | `true` | تکهٔ بی‌دیالوگ آپلود نشود |
 | `WHISPER_MODEL` | `base` | مدل Whisper |
 | `OUTPUT_NAME` | خالی | نام فایل خروجی |
+| `TRANSLATION_PROMPT` | خالی | پرامپت لحن/سبک ترجمه (مثلاً فارسی خودمانی) |
 | `WORK_DIR` | `work` | پوشهٔ کار، کش تکه‌ها و `plan.json` |
 | `PROXY_OXYLABS` | خالی | پروکسی Oxylabs: `host:port:user:pass` |
 | `PROXY_ENABLED` | خودکار | `false`/`0` = خاموش |
@@ -138,3 +139,5 @@ Actions → **Rask dub** → `video_url` و `target_lang`.
 - کش تکه‌ها در `work/state-<shard>.json` است؛ اجرای دوباره فقط تکه‌های ناقص را می‌فرستد.
 - اینباکس emailnator عمومی است: فقط برای کد ورود یک‌بارمصرف.
 - برای تست سریع یک کلیپ کوتاه **با گفتار** بده.
+- `TRANSLATION_PROMPT` را هنگام ساخت پروژه می‌فرستیم، چون پایپ‌لاین آن را در همان
+  ترجمهٔ اول می‌خواند و روی پلن Free امکان دوبلهٔ مجدد (Apply changes) وجود ندارد.

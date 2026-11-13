@@ -127,6 +127,11 @@ on:
         required: false
         default: ''
         type: string
+      translation_prompt:
+        description: 'اختیاری — پرامپت لحن/سبک ترجمه (مثلاً فارسی خودمانی)؛ باید هنگام ساخت پروژه ست شود'
+        required: false
+        default: ''
+        type: string
       publish_release:
         description: 'انتشار خروجی (mp4 + mp3) روی GitHub Release'
         required: true
@@ -166,6 +171,7 @@ env:
   MAX_ACCOUNTS: ${{ inputs.max_accounts }}
   OTP_WAIT_SECONDS: ${{ inputs.otp_wait_seconds }}
   OUTPUT_NAME: ${{ inputs.output_name }}
+  TRANSLATION_PROMPT: ${{ inputs.translation_prompt }}
   # emailnator: 3 = ".Gmail" dot alias only
   EMAILNATOR_IDS: '3'
   EMAILNATOR_POLL_SECONDS: '4'
