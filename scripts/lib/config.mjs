@@ -6,6 +6,7 @@
 
 import path from 'node:path';
 import * as rask from './rask.mjs';
+import { DEFAULT_SIZES, parseSizes } from './ladder.mjs';
 
 const env = process.env;
 
@@ -91,6 +92,15 @@ export const cfg = {
 
   outputName: (env.OUTPUT_NAME || '').trim(),
 
+  // Release ladder (stage 3b). The merge output is re-encoded to these sizes;
+  // `off` / an empty value publishes the master mp4 untouched, and
+  // RENDER_UPSCALE=1 renders a rung that is bigger than the source instead of
+  // skipping it.
+  renderSizes: parseSizes(env.RENDER_SIZES, DEFAULT_SIZES),
+  renderUpscale: flag(env.RENDER_UPSCALE, false),
+  renderPreset: (env.RENDER_PRESET || 'veryfast').trim(),
+  renderCrf: clamp(num(env.RENDER_CRF, 22), 0, 51),
+
   // Source download. Plain http(s) links still go through curl; a YouTube link
   // is resolved by yt-dlp through the egress selected by PROXY_ENABLED
   // (Firefox VPN or Oxylabs). There is deliberately no cookie path: see
@@ -114,6 +124,7 @@ export const cfg = {
 if (cfg.hardCap < cfg.chunkSeconds) cfg.hardCap = cfg.chunkSeconds;
 
 cfg.outDir = path.join(cfg.workDir, 'out');
+cfg.renderDir = path.join(cfg.outDir, 'render');
 cfg.chunksDir = path.join(cfg.workDir, 'chunks');
 cfg.dubDir = path.join(cfg.workDir, 'dub');
 cfg.reportsDir = path.join(cfg.workDir, 'reports');

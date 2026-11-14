@@ -12,6 +12,8 @@
  * 4. fit every dubbed chunk to its exact slot, concatenate the timeline and mux
  *    it onto the ORIGINAL video with `-c:v copy` — the picture never leaves the
  *    machine, and the result carries no Rask watermark.
+ * 5. re-encode that master into the release ladder (360p/480p/720p/1080p by
+ *    default, RENDER_SIZES changes it, `off` keeps the master only).
  *
  * A chunk that cannot be dubbed keeps its original audio instead of silence;
  * failed chunks get two extra passes on fresh accounts first (RETRY_ROUNDS).
@@ -22,6 +24,7 @@
 
 import { cfg } from './lib/config.mjs';
 import { prepare, dubPlan, merge } from './lib/pipeline.mjs';
+import { render } from './lib/render.mjs';
 import { log, warn } from './lib/report.mjs';
 
 async function main() {
@@ -35,6 +38,9 @@ async function main() {
 
   const out = await merge(cfg, plan);
   log(`[done] ${out.outputs.join(' + ')}`);
+
+  // Stage 3b: the same ladder the workflow publishes (RENDER_SIZES=off skips it).
+  await render(cfg);
   return out;
 }
 

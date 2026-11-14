@@ -8,8 +8,10 @@
 #                Rask/emailnator limits are spread instead of serialised.
 #   3. merge     one runner: collect every shard, put the original audio back
 #                for chunks that could not be dubbed, concatenate the timeline
-#                sample-accurately, mux onto the untouched video (-c:v copy) and
-#                publish BOTH the .mp4 and the dubbed .mp3 to a GitHub Release.
+#                sample-accurately, mux onto the untouched video (-c:v copy),
+#                re-encode that master into the release ladder
+#                (360p / 480p / 720p / 1080p) and publish the ladder plus the
+#                dubbed .mp3 to a GitHub Release.
 #
 # Accounts: every third chunk is dubbed on a throw-away account made from an
 # emailnator Gmail address (Cognito signup + emailed code). A fresh account
@@ -133,10 +135,15 @@ on:
         default: ''
         type: string
       publish_release:
-        description: 'انتشار خروجی (mp4 + mp3) روی GitHub Release'
+        description: 'انتشار خروجی روی GitHub Release'
         required: true
         default: true
         type: boolean
+      render_sizes:
+        description: 'اندازه‌های ویدیوی منتشرشده با کاما — خالی یا off = فقط ویدیوی اصلی بدون تغییر اندازه'
+        required: false
+        default: '360,480,720,1080'
+        type: string
       queue_group:
         description: 'اختیاری — اجراهایی با این مقدار یکسان پشت سر هم می‌روند؛ خالی = موازی'
         required: false
@@ -177,6 +184,12 @@ env:
   OTP_WAIT_SECONDS: ${{ inputs.otp_wait_seconds }}
   OUTPUT_NAME: ${{ inputs.output_name }}
   TRANSLATION_PROMPT: ${{ inputs.translation_prompt }}
+  # Release ladder (stage 3b). One ffmpeg pass re-encodes the merged master into
+  # every size here; 'off' publishes the master untouched. Rungs above the
+  # source's short side are skipped, never upscaled.
+  RENDER_SIZES: ${{ inputs.render_sizes }}
+  RENDER_PRESET: 'veryfast'
+  RENDER_CRF: '22'
   # emailnator: 3 = ".Gmail" dot alias only
   EMAILNATOR_IDS: '3'
   EMAILNATOR_POLL_SECONDS: '4'
@@ -341,7 +354,9 @@ jobs:
     needs: [prepare, dub]
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # The ladder is the long part: one decode, four encodes (a 30 minute source
+    # is roughly 45-60 minutes of x264), so merge gets room for it.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
@@ -390,6 +405,18 @@ jobs:
           INPUT_URL: ${{ inputs.video_url }}
         run: node scripts/merge.mjs
 
+      # Stage 3b. The master merge just wrote keeps the SOURCE size and codec
+      # (a 4K AV1 download, a 1080p HEVC phone clip), which is not what a release
+      # should ship. One ffmpeg pass decodes it once and encodes every rung in
+      # RENDER_SIZES into work/out/render/<name>-<size>p.mp4.
+      # continue-on-error: a broken transcode must not throw away a finished dub
+      # — publish falls back to the master mp4 when the ladder is empty, and the
+      # master stays in the rask-output artifact either way.
+      - name: Render resolutions
+        id: render
+        continue-on-error: true
+        run: node scripts/render.mjs
+
       - name: Upload output
         if: always()
         uses: actions/upload-artifact@v4
@@ -419,14 +446,33 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
-          files=("$WORK_DIR"/out/*.mp4 "$WORK_DIR"/out/*.mp3)
+          # The ladder is what a release ships (every size up to 1080p). The
+          # master mp4 is only a fallback for a render that did not produce
+          # anything — it keeps the source codec/size, so it is the wrong asset
+          # for most players, but shipping it beats shipping no video at all.
+          videos=("$WORK_DIR"/out/render/*.mp4)
+          if [ ${#videos[@]} -eq 0 ]; then
+            videos=("$WORK_DIR"/out/*.mp4)
+            if [ ${#videos[@]} -gt 0 ]; then
+              echo "warning: no rendered ladder, publishing the master video instead"
+            fi
+          fi
+
+          files=("${videos[@]}" "$WORK_DIR"/out/*.mp3)
           if [ ${#files[@]} -eq 0 ]; then
             echo "nothing to publish (merge produced no output)"
             exit 0
           fi
 
-          printf -v notes 'Dubbed with Rask (audio only).\n\n- source: %s\n- target: %s\n- duration: %ss\n- chunks: %s (dubbed %s, kept original %s)\n- run: %s\n' \
+          ladder=''
+          for mp4 in "$WORK_DIR"/out/render/*.mp4; do
+            ladder="$ladder $(basename "$mp4")"
+          done
+          ladder="${ladder# }"
+
+          printf -v notes 'Dubbed with Rask (audio only).\n\n- source: %s\n- target: %s\n- duration: %ss\n- chunks: %s (dubbed %s, kept original %s)\n- video: %s\n- run: %s\n' \
             "$SOURCE" "$TARGET_LANG" "${DURATION:-?}" "${CHUNKS:-?}" "${DUBBED:-?}" "${ORIGINAL:-?}" \
+            "${ladder:-master only}" \
             "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           ls -lh "${files[@]}"
@@ -441,6 +487,7 @@ jobs:
             echo ''
             echo "- video: \`${{ steps.merge.outputs.video_path }}\`"
             echo "- audio: \`${{ steps.merge.outputs.audio_path }}\`"
+            echo "- renditions: \`${{ steps.render.outputs.renditions }}\`"
             echo "- duration: ${{ steps.merge.outputs.duration }}s"
             echo "- chunks: ${{ steps.merge.outputs.chunks }} (dubbed ${{ steps.merge.outputs.dubbed }}, original ${{ steps.merge.outputs.original_audio }})"
             echo "- accounts: ${{ steps.merge.outputs.accounts }}"
